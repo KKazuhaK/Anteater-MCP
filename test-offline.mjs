@@ -465,10 +465,14 @@ await test("forwarded headers are believed only from a trusted proxy", async () 
       const got = remotes(log()).slice(-5);
       assert.deepEqual(got, ["203.0.113.9", "203.0.113.9", "127.0.0.1", "203.0.113.9", "2001:db8::1"]);
 
-      const spec = await (await fetch("http://127.0.0.1:8934/openapi.json", {
-        headers: { "X-Forwarded-Host": "anteater.example.com", "X-Forwarded-Proto": "https" },
-      })).json();
+      const fwd = { "X-Forwarded-Host": "anteater.example.com", "X-Forwarded-Proto": "https" };
+      const spec = await (await fetch("http://127.0.0.1:8934/openapi.json", { headers: fwd })).json();
       assert.equal(spec.servers[0].url, "https://anteater.example.com");
+
+      // /health reports the same value without needing the token, which is what makes
+      // a reverse-proxy misconfiguration diagnosable from outside.
+      const health = await (await fetch("http://127.0.0.1:8934/health", { headers: fwd })).json();
+      assert.equal(health.baseUrl, spec.servers[0].url, "/health and /openapi.json disagree on the base URL");
     } finally { srv.kill(); }
   }
 });

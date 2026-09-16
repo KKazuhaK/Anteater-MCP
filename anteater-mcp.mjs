@@ -3489,6 +3489,13 @@ function runHttp(port, host) {
           ok: true,
           server: SERVER_INFO,
           tools: TOOLS.length,
+          // The address this server believes it is reachable at, which is what the
+          // generated OpenAPI document advertises. Reporting it here makes the usual
+          // reverse-proxy mistake diagnosable without credentials: an unexpected
+          // http:// or localhost means X-Forwarded-Proto is missing, or the peer is
+          // not listed in ANTEATER_TRUSTED_PROXIES. It reveals nothing the caller did
+          // not already know, since they chose the address they connected to.
+          baseUrl: publicBaseUrl(req),
           license: "AGPL-3.0-or-later",
           // AGPL s13: users interacting with this over a network are entitled to the
           // Corresponding Source. If you modify and deploy it, point this at your fork.
