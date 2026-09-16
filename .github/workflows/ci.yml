@@ -28,6 +28,9 @@ jobs:
       - name: Version consistency
         run: npm run check:version
 
+      - name: Configuration consistency
+        run: node scripts/check-config.mjs
+
       - name: Tools load
         run: node anteater-mcp.mjs --list-tools
 

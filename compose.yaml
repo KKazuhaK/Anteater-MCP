@@ -18,6 +18,10 @@ services:
       ANTEATER_API_KEY: "${ANTEATER_API_KEY:-}"
       ANTEATER_API_BASE: "https://anteaterapi.com"
       ANTEATER_ALLOWED_ORIGINS: ""
+      # Which peers may set X-Forwarded-*. Without this the server ignores them, so a
+      # container behind a reverse proxy logs the bridge gateway and reports http://
+      # in the generated OpenAPI document. "private" covers the Docker bridge.
+      ANTEATER_TRUSTED_PROXIES: "${ANTEATER_TRUSTED_PROXIES:-private}"
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
