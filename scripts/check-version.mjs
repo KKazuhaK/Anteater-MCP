@@ -71,5 +71,22 @@ if (dockerSource !== repoUrl) {
   throw new Error(`Dockerfile image.source label does not match: ${dockerSource || "missing"}`);
 }
 
+// server.json is what the MCP registry publishes. A stale version here would
+// advertise a release that does not match the image it names.
+const serverJson = JSON.parse(await readFile(new URL("../server.json", import.meta.url), "utf8"));
+if (serverJson.version !== packageJson.version) {
+  throw new Error(`Version mismatch: package.json=${packageJson.version}, server.json=${serverJson.version}`);
+}
+const ociPackage = (serverJson.packages || []).find((x) => x.registryType === "oci");
+if (ociPackage?.version !== packageJson.version) {
+  throw new Error(`server.json oci package version is ${ociPackage?.version}, expected ${packageJson.version}`);
+}
+// Publishing this file is public. A declared secret must never carry a value.
+for (const env of ociPackage?.environmentVariables || []) {
+  if (env.isSecret && (env.value !== undefined || env.default !== undefined)) {
+    throw new Error(`server.json declares ${env.name} as secret but gives it a value`);
+  }
+}
+
 console.log(`app ${packageJson.version} and Node ${nodeVersion} are consistent`);
 console.log(`repository ${repoUrl} is consistent across the server, package.json and Dockerfile`);

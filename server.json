@@ -1,0 +1,46 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.KKazuhaK/anteater-mcp",
+  "title": "Anteater MCP",
+  "description": "Course search and registration planning for UC Irvine: live section availability, grade distributions by professor, enrollment history, prerequisite checking and schedule conflict detection.",
+  "version": "0.0.6",
+  "websiteUrl": "https://github.com/KKazuhaK/Anteater-MCP#readme",
+  "repository": {
+    "url": "https://github.com/KKazuhaK/Anteater-MCP",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/kkazuhak/anteater-mcp",
+      "version": "0.0.6",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:8787/mcp"
+      },
+      "environmentVariables": [
+        {
+          "name": "ANTEATER_MCP_TOKEN",
+          "description": "Shared secret clients must present as 'Authorization: Bearer <token>'. Required before exposing the server beyond loopback.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "ANTEATER_API_KEY",
+          "description": "Your own Anteater API key. Optional, but anonymous calls share a global hourly quota. Request one at https://dashboard.anteaterapi.com and choose type 'secret'.",
+          "isSecret": true
+        },
+        {
+          "name": "ANTEATER_TRUSTED_PROXIES",
+          "description": "Which peers may set X-Forwarded-*. Defaults to 'private', which covers the Docker bridge. Without it the server ignores forwarded headers, because they are client-supplied.",
+          "default": "private"
+        },
+        {
+          "name": "ZOTCOURSE_API_BASE",
+          "description": "Independent fallback for live schedule data when Anteater API is unavailable. Set to 'off' to disable.",
+          "default": "https://zotcourse.appspot.com"
+        }
+      ]
+    }
+  ]
+}

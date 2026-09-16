@@ -249,3 +249,36 @@ jobs:
           else
             gh release edit "${RELEASE_TAG}" --draft=false --latest
           fi
+
+  registry:
+    name: Publish to the MCP Registry
+    # Runs last: the registry entry names an OCI image, so that image has to exist
+    # and the release has to be live before anything advertises them.
+    needs: [validate, publish]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # github-oidc login, so no token is stored anywhere
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Confirm server.json matches the tag
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-version.mjs
+
+      - name: Install mcp-publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" \
+            | tar xz mcp-publisher
+
+      - name: Authenticate
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish
+        run: ./mcp-publisher publish

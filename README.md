@@ -554,6 +554,16 @@ Undocumented upstream; all handled here, and listed in case they save you the de
 
 ---
 
+## Distribution
+
+Published to the [MCP Registry](https://registry.modelcontextprotocol.io) as
+`io.github.KKazuhaK/anteater-mcp`, listing the container image only. The registry entry
+describes how to run your own instance; it does not point at anyone's deployment, since a
+hosted instance is gated behind its own token and its upstream quota belongs to whoever
+runs it.
+
+Each release also publishes the GHCR image and standalone binaries for six platforms.
+
 ## Licence and attribution
 
 Data from **[Anteater API](https://icssc.link/about-anteaterapi)**, maintained by ICSSC
