@@ -391,7 +391,11 @@ function seatText(s) {
   const cap = s.maxCapacity ?? "?";
   const w = Number(s.numOnWaitlist);
   const wl = Number.isFinite(w) && w > 0 ? ` wl:${w}` : "";
-  return `${enrolled}/${cap}${wl}`;
+  const nr = Number(s.numNewOnlyReserved);
+  // Seats held for incoming students are counted in capacity but are not available
+  // to a continuing student, so the apparent opening overstates the real one.
+  const res = Number.isFinite(nr) && nr > 0 ? ` new:${nr}` : "";
+  return `${enrolled}/${cap}${wl}${res}`;
 }
 
 /** schools > departments > courses > sections  ->  one flat array. */
@@ -978,7 +982,8 @@ tool({
     if (truncated) out.push(`(Truncated — more sections matched. Narrow the filters or raise \`limit\`.)`);
     out.push(
       `Seats shown as enrolled/capacity (wl:N = waitlist). Status is WebSoc's own OPEN/Waitl/FULL. ` +
-        `A "!" marks an unscheduled (TBA) meeting — it cannot be checked for conflicts.`,
+        `A "!" marks an unscheduled (TBA) meeting — it cannot be checked for conflicts. ` +
+        `"new:N" means N seats are held for incoming students and are not available to you.`,
     );
     if (rows.some((r) => COMPANION_TYPES.has(r.sectionType))) {
       out.push(
@@ -1618,10 +1623,30 @@ tool({
 
     const tba = rows.filter(hasTBA);
     const cancelled = rows.filter((s) => s.isCancelled);
-    const full_ = rows.filter((s) => !s.isCancelled && /full/i.test(s.status || ""));
+    // WebSoc statuses are OPEN | Waitl | FULL | NewOnly | "". Only OPEN means a
+    // continuing student can enrol right now; matching /full/ alone let a waitlisted
+    // or new-student-only section pass as if it were fine.
+    const blocked = rows.filter((s) => !s.isCancelled && s.status && s.status !== "OPEN");
+    const reserved = rows.filter((s) => s.numNewOnlyReserved && s.numNewOnlyReserved !== "0");
 
     if (cancelled.length) warnings.push(`CANCELLED: ${cancelled.map((s) => `${s.sectionCode} ${s.deptCode} ${s.courseNumber}`).join(", ")}`);
-    if (full_.length) warnings.push(`No seats: ${full_.map((s) => `${s.sectionCode} (${s.status})`).join(", ")} — you would be joining a waitlist or locked out.`);
+    if (blocked.length) {
+      const explain = (st) =>
+        st === "Waitl" ? "waitlist only"
+        : st === "FULL" ? "no seats"
+        : st === "NewOnly" ? "seats held for new students — a continuing student cannot take them"
+        : st;
+      warnings.push(
+        `Not openly enrollable: ` +
+          blocked.map((s) => `${s.sectionCode} ${s.deptCode} ${s.courseNumber} (${s.status} — ${explain(s.status)})`).join("; "),
+      );
+    }
+    if (reserved.length) {
+      warnings.push(
+        `Seats reserved for new students, so fewer are actually available than the count suggests: ` +
+          reserved.map((s) => `${s.sectionCode} (${s.numNewOnlyReserved} held)`).join(", "),
+      );
+    }
     if (tba.length) {
       warnings.push(
         `Unscheduled meetings, EXCLUDED from the conflict check: ` +

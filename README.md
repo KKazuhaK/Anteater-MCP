@@ -340,7 +340,9 @@ papering over them, because the alternative is confident wrong advice.
   independently (`I&C SCI 31`: lectures A/B, labs 1–9). `check_schedule` therefore tells
   you when a required component is *missing entirely*, and when a pairing *cannot be
   verified* — but it cannot confirm that a given lab goes with a given lecture. Confirm
-  that on WebReg.
+  that on WebReg. Neither of ICSSC's own clients infers this either: AntAlmanac and
+  PeterPortal both render sections as a flat list and leave the pairing to the student,
+  which is good evidence the data simply is not there.
 - **Enrollment restrictions are not evaluated against you.** `find_sections` and
   `recommend_courses` surface the codes and their meanings; whether you satisfy
   "Major only" or "Graduate only" is enforced by the registrar.
@@ -413,6 +415,10 @@ Undocumented upstream; all handled here, and listed in case they save you the de
   alone is refused, and it collapses the three summer sessions into a single `Summer`.
 - **Restriction strings contain prose.** `"A and N"` must be split on whitespace *and*
   have the literal `and`/`or` discarded, or the conjunction renders as a code.
+- **Section status is an enum, not free text**: `OPEN`, `Waitl`, `FULL`, `NewOnly`, or
+  empty. Only `OPEN` means a continuing student can enrol now — `NewOnly` marks seats
+  held for incoming students. `numNewOnlyReserved` counts seats inside the capacity that
+  are reserved the same way, so the apparent opening overstates the real one.
 
 ---
 
