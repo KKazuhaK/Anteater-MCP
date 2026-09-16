@@ -3,7 +3,7 @@
   "name": "io.github.KKazuhaK/anteater-mcp",
   "title": "Anteater MCP",
   "description": "Course search and registration planning for UC Irvine: live section availability, grade distributions by professor, enrollment history, prerequisite checking and schedule conflict detection.",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "websiteUrl": "https://github.com/KKazuhaK/Anteater-MCP#readme",
   "repository": {
     "url": "https://github.com/KKazuhaK/Anteater-MCP",
@@ -13,7 +13,7 @@
     {
       "registryType": "oci",
       "identifier": "ghcr.io/kkazuhak/anteater-mcp",
-      "version": "0.0.6",
+      "version": "0.0.7",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:8787/mcp"
