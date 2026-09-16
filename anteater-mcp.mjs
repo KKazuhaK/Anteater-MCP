@@ -4,7 +4,7 @@
  * (https://github.com/icssc/anteater-api), built for course discovery and
  * registration planning.
  *
- * Zero runtime dependencies. Requires Node >= 22.
+ * Zero runtime dependencies. Requires Node >= 24.
  *
  *   stdio (Claude Desktop / Claude Code):  node anteater-mcp.mjs
  *   streamable HTTP (ChatGPT / remote):    node anteater-mcp.mjs --http [--port 8787]
@@ -629,7 +629,7 @@ tool({
     "Search the UCI course catalogue (all courses that exist, not term-specific offerings). " +
     "Use a free-text `query` for fuzzy search ('machine learning', 'CS 161'), or the structured filters " +
     "to browse (e.g. all GE-2 lower-division courses worth 4 units). " +
-    "To see which sections actually run in a given quarter and whether seats are open, use find_sections instead.",
+    "To see which sections actually run in a given quarter and whether seats are open, use search_sections instead.",
   inputSchema: {
     type: "object",
     properties: {
@@ -788,16 +788,16 @@ tool({
       for (const t of c.terms.slice(-15)) { const k = t.split(" ")[1]; q[k] = (q[k] || 0) + 1; }
       L.push(`Typical quarters (last ~5 yrs): ${Object.entries(q).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} x${v}`).join(", ")}`);
     }
-    L.push(`\nNext: find_sections for live seats, course_grades for GPA by professor, check_prerequisites to test eligibility.`);
+    L.push(`\nNext: search_sections for live seats, get_course_grades for GPA by professor, check_prerequisites to test eligibility.`);
     L.push(ATTRIBUTION);
     return L.join("\n");
   },
 });
 
-/* -- 5. find_sections ---------------------------------------------- */
+/* -- 5. search_sections ---------------------------------------------- */
 
 tool({
-  name: "find_sections",
+  name: "search_sections",
   title: "Find class sections in a term (WebSoc)",
   description:
     "The main course-finding tool. Queries UCI's live schedule of classes for one term and returns matching " +
@@ -1001,17 +1001,17 @@ tool({
   },
 });
 
-/* -- 6. course_grades ---------------------------------------------- */
+/* -- 6. get_course_grades ---------------------------------------------- */
 
 tool({
-  name: "course_grades",
+  name: "get_course_grades",
   title: "Grade distribution for a course",
   description:
     "Historical grade distributions and average GPA for ONE COURSE, broken down by instructor " +
     "(default) or by term. Use this to answer 'which professor should I take for this course?' or " +
     "'how hard is this class?'. " +
     "Start from a course; to start from a person instead and see how they grade across everything " +
-    "they teach, use instructor_info. " +
+    "they teach, use get_instructor. " +
     "Data is from UCI's public records; recent quarters may be missing.",
   inputSchema: {
     type: "object",
@@ -1074,7 +1074,7 @@ tool({
         `No grade data for those filters.` +
         (instructor
           ? ` Searched the instructor as "${instructor}". If that is not how WebSoc spells the name, ` +
-            `call instructor_info to find the exact form, or drop the instructor filter to see who has grade data.`
+            `call get_instructor to find the exact form, or drop the instructor filter to see who has grade data.`
           : ` The course may be new, or graded P/NP only, or the recent terms may not be published yet.`)
       );
     }
@@ -1114,16 +1114,16 @@ tool({
   },
 });
 
-/* -- 7. instructor_info -------------------------------------------- */
+/* -- 7. get_instructor -------------------------------------------- */
 
 tool({
-  name: "instructor_info",
+  name: "get_instructor",
   title: "Look up an instructor",
   description:
     "Find ONE INSTRUCTOR and see their title, department, every course they have taught, and the " +
     "grades they give across all of them. Use to evaluate a professor in general, or to resolve a " +
     "name to the exact form the grade endpoints expect. " +
-    "Start from a person; to compare all the instructors of a single course instead, use course_grades.",
+    "Start from a person; to compare all the instructors of a single course instead, use get_course_grades.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1180,10 +1180,10 @@ tool({
   },
 });
 
-/* -- 8. enrollment_history ----------------------------------------- */
+/* -- 8. get_enrollment_history ----------------------------------------- */
 
 tool({
-  name: "enrollment_history",
+  name: "get_enrollment_history",
   title: "How fast a class fills up",
   description:
     "Historical enrollment for a course: final enrollment vs capacity, waitlist size, and (for recent terms) " +
@@ -1468,7 +1468,7 @@ tool({
   },
   async run(a) {
     const { year, quarter } = parseTerm(a.term);
-    // Accept either an array or the comma-separated string find_sections documents
+    // Accept either an array or the comma-separated string search_sections documents
     // for a parameter of the same name; passing a string used to throw a raw TypeError.
     const raw = Array.isArray(a.sectionCodes)
       ? a.sectionCodes
@@ -1809,8 +1809,8 @@ tool({
           : "";
       })() +
       `\n\nGPA/A%/n are historical across all past offerings of the course (all instructors), not this term's, ` +
-      `and not specific to whoever is teaching it now — use course_grades to check that. ` +
-      `A low n means an unreliable average. Use course_grades to compare instructors, find_sections for all ` +
+      `and not specific to whoever is teaching it now — use get_course_grades to check that. ` +
+      `A low n means an unreliable average. Use get_course_grades to compare instructors, search_sections for all ` +
       `sections of a course, and check_schedule to test for conflicts.\n${ATTRIBUTION}`
     );
   },
@@ -1859,7 +1859,7 @@ tool({
     "general undergraduate requirements (GE categories, unit minimums). This is the authoritative " +
     "list of what must be completed to graduate — use it for 'what do I still need?'. " +
     "For the catalogue's suggested ordering of those requirements across four years, use " +
-    "sample_program.",
+    "get_sample_program.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1978,7 +1978,7 @@ tool({
   },
 });
 
-/* -- 15. ap_credit ------------------------------------------------- */
+/* -- 15. get_ap_credit ------------------------------------------------- */
 
 /** Render the AND/OR tree the AP reward endpoint uses for granted courses. */
 function renderGrant(node) {
@@ -1997,7 +1997,7 @@ function renderGrant(node) {
 }
 
 tool({
-  name: "ap_credit",
+  name: "get_ap_credit",
   title: "What an AP exam is worth at UCI",
   description:
     "Look up what AP exam scores earn at UCI: units, elective units, GE categories and specific " +
@@ -2015,7 +2015,7 @@ tool({
     const q = (a.exam || "").trim().toUpperCase();
     const hits = q ? list.filter((e) => (e.fullName || "").toUpperCase().includes(q) || (e.catalogueName || "").toUpperCase().includes(q)) : list;
 
-    if (!hits.length) return `No AP exam matches "${a.exam}". Call ap_credit with no argument to list all ${list.length}.`;
+    if (!hits.length) return `No AP exam matches "${a.exam}". Call get_ap_credit with no argument to list all ${list.length}.`;
 
     if (!q || hits.length > 12) {
       return (
@@ -2047,10 +2047,10 @@ tool({
   },
 });
 
-/* -- 16. sample_program -------------------------------------------- */
+/* -- 16. get_sample_program -------------------------------------------- */
 
 tool({
-  name: "sample_program",
+  name: "get_sample_program",
   title: "Sample four-year plan for a major",
   description:
     "The catalogue's SUGGESTED quarter-by-quarter sequence for a major — a pacing example, not a " +
@@ -2076,7 +2076,7 @@ tool({
 
     const q = a.program.trim().toUpperCase();
     const hits = all.filter((p) => p.id.toUpperCase().includes(q.replace(/[^A-Z0-9_]/g, "")) || p.programName.toUpperCase().includes(q));
-    if (!hits.length) return `No sample program matches "${a.program}". Call sample_program with no argument to list all ${all.length}.`;
+    if (!hits.length) return `No sample program matches "${a.program}". Call get_sample_program with no argument to list all ${all.length}.`;
     if (hits.length > 1) {
       return (
         `${hits.length} programs match "${a.program}":\n\n` +
@@ -2107,10 +2107,10 @@ tool({
   },
 });
 
-/* -- 17. course_materials ------------------------------------------ */
+/* -- 17. get_course_materials ------------------------------------------ */
 
 tool({
-  name: "course_materials",
+  name: "get_course_materials",
   title: "Textbooks and materials for a course",
   description:
     "Required and recommended textbooks for a course, with ISBNs and a UCI Library link for each. " +
@@ -2203,14 +2203,14 @@ const INSTRUCTIONS = `Course search and registration planning for UC Irvine, bac
 
 Typical flow for "help me pick classes":
   1. list_terms — confirm which quarter the student means.
-  2. recommend_courses or find_sections — find candidate sections that fit their constraints.
-  3. course_grades / instructor_info — compare professors; get_syllabi shows real workload.
-  4. enrollment_history — judge how hard the class is to get into and in what order to enrol.
-  5. check_prerequisites — confirm eligibility; ap_credit resolves AP-score substitutions.
+  2. recommend_courses or search_sections — find candidate sections that fit their constraints.
+  3. get_course_grades / get_instructor — compare professors; get_syllabi shows real workload.
+  4. get_enrollment_history — judge how hard the class is to get into and in what order to enrol.
+  5. check_prerequisites — confirm eligibility; get_ap_credit resolves AP-score substitutions.
   6. check_schedule — validate the final section codes for meeting and final-exam conflicts.
 
 Degree planning: list_programs -> get_program_requirements for the binding rules, and
-sample_program for the catalogue's suggested sequence. get_program_requirements with
+get_sample_program for the catalogue's suggested sequence. get_program_requirements with
 kind "ugrad" returns the university-wide GE requirements.
 
 Six prompts package these flows end to end: plan-quarter, pick-professor, find-easy-ge,
@@ -2258,9 +2258,9 @@ const PROMPTS = [
       `What I need: ${goals || "(ask me before assuming)"}\n\n` +
       `Work through it in this order:\n` +
       `1. list_terms to confirm ${term} has data and when instruction and finals fall.\n` +
-      `2. recommend_courses / find_sections to find candidates that fit my constraints.\n` +
-      `3. course_grades for any course I'm serious about, so I know which instructor to pick.\n` +
-      `4. enrollment_history for each one, so I know how hard it is to get a seat and in what order to enroll.\n` +
+      `2. recommend_courses / search_sections to find candidates that fit my constraints.\n` +
+      `3. get_course_grades for any course I'm serious about, so I know which instructor to pick.\n` +
+      `4. get_enrollment_history for each one, so I know how hard it is to get a seat and in what order to enroll.\n` +
       `5. check_prerequisites on anything with prerequisites — ask me what I have already taken.\n` +
       `6. check_schedule on the final set of section codes to prove there are no meeting or final-exam conflicts.\n\n` +
       `Give me the section codes to type into WebReg, the total units, and an enrollment order with the riskiest class first.`,
@@ -2272,9 +2272,9 @@ const PROMPTS = [
     arguments: [arg("course", 'The course, e.g. "COMPSCI 161".', true), arg("term", 'Optional term to check who is teaching, e.g. "2026 Fall".')],
     build: ({ course, term }) =>
       `Which professor should I take for ${course} at UCI?\n\n` +
-      `1. course_grades for ${course}, grouped by instructor. Sort by average GPA but tell me the sample size for each — an average over 30 grades is noise next to one over 1500.\n` +
-      (term ? `2. find_sections for ${course} in ${term} to see who is actually teaching it and at what time.\n` : `2. find_sections to see who is currently teaching it.\n`) +
-      `3. instructor_info on the realistic candidates, to see how they grade across all their courses, not just this one.\n` +
+      `1. get_course_grades for ${course}, grouped by instructor. Sort by average GPA but tell me the sample size for each — an average over 30 grades is noise next to one over 1500.\n` +
+      (term ? `2. search_sections for ${course} in ${term} to see who is actually teaching it and at what time.\n` : `2. search_sections to see who is currently teaching it.\n`) +
+      `3. get_instructor on the realistic candidates, to see how they grade across all their courses, not just this one.\n` +
       `4. get_syllabi for past offerings so I can see the real workload and grading breakdown.\n\n` +
       `Then give me a recommendation, and say plainly where the data is too thin to support one.`,
   },
@@ -2287,8 +2287,8 @@ const PROMPTS = [
       `Find me a ${ge} course for ${term} at UCI.\n\n` +
       `Constraints: ${constraints || "(none given — ask me)"}\n\n` +
       `Use recommend_courses with the ge, day and time filters and availability OpenOnly, ranked by GPA. ` +
-      `Then for the top few, use course_grades to check whether the good average holds for the instructor ` +
-      `actually teaching it this term, and enrollment_history to see whether I can realistically get a seat.\n\n` +
+      `Then for the top few, use get_course_grades to check whether the good average holds for the instructor ` +
+      `actually teaching it this term, and get_enrollment_history to see whether I can realistically get a seat.\n\n` +
       `Warn me about small sample sizes and about any enrollment restriction that would block me.`,
   },
   {
@@ -2300,7 +2300,7 @@ const PROMPTS = [
       `Check this ${term} schedule at UCI: ${sections}\n\n` +
       `1. check_schedule on those codes for meeting conflicts, final-exam conflicts and total units.\n` +
       `2. Flag anything that would stop me enrolling: restriction codes, full sections, waitlists.\n` +
-      `3. enrollment_history on each course so I know which one to grab first.\n\n` +
+      `3. get_enrollment_history on each course so I know which one to grab first.\n\n` +
       `Tell me whether this schedule works, what the total units are, and in what order to enroll.`,
   },
   {
@@ -2312,7 +2312,7 @@ const PROMPTS = [
       `Can I take ${course} at UCI?\n\n` +
       `I have completed: ${completed || "(ask me)"}\n\n` +
       `Use check_prerequisites and walk the tree branch by branch. Then:\n` +
-      `- If an AP score could satisfy a branch, use ap_credit to confirm the exact exam name and score needed.\n` +
+      `- If an AP score could satisfy a branch, use get_ap_credit to confirm the exact exam name and score needed.\n` +
       `- Use get_course to show me the enrollment restrictions, which the prerequisite tree does not cover ` +
       `and which the registrar enforces separately.\n` +
       `- If I am missing something, tell me what to take first and when it is usually offered.`,
@@ -2327,7 +2327,7 @@ const PROMPTS = [
       `Completed: ${completed || "(ask me)"}\n\n` +
       `1. list_programs to find the program id, then get_program_requirements for the full tree.\n` +
       `2. Work through each requirement and mark it satisfied, partially satisfied, or outstanding.\n` +
-      `3. sample_program for the catalogue's recommended sequence, to sanity-check my pacing.\n` +
+      `3. get_sample_program for the catalogue's recommended sequence, to sanity-check my pacing.\n` +
       `4. get_program_requirements with kind "ugrad" for the university-wide GE requirements.\n\n` +
       `Give me a clear list of what is left, and which of it is offered next term.`,
   },

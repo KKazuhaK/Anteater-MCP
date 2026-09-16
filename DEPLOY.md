@@ -44,15 +44,47 @@ it carries the token, as either:
 > and rotate the token if it leaks. It is a rate-limit key, not a password to anything of
 > yours.
 
-## 2. Install on the server
+## 2. Deploy with Docker Compose (recommended)
+
+The release image is built for Linux amd64 and arm64. The supplied Compose definition
+binds only to loopback, runs without Linux capabilities, uses a read-only root filesystem,
+and refuses to start until a token is provided.
+
+```bash
+mkdir -p /opt/anteater-mcp
+cd /opt/anteater-mcp
+curl -O https://raw.githubusercontent.com/KKazuhaK/anteater-mcp/main/compose.yaml
+cat > .env <<EOF
+ANTEATER_MCP_TOKEN=$(openssl rand -hex 24)
+ANTEATER_API_KEY=<your optional Anteater API key>
+EOF
+chmod 600 .env
+docker compose up -d
+docker compose ps
+curl -fsS http://127.0.0.1:8787/health
+```
+
+Update without changing configuration:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+Use `ANTEATER_MCP_IMAGE_TAG=v1.0.0` in `.env` to pin an immutable release instead of
+tracking `latest`. Continue at [Terminate TLS](#5-terminate-tls) to expose it safely.
+If the first pull asks you to authenticate, the repository owner has not yet changed the
+new GHCR package from its initial private visibility to **Public**.
+
+## 3. Install manually on the server
 
 ```bash
 sudo useradd --system --create-home --shell /usr/sbin/nologin anteater
 sudo -u anteater git clone https://github.com/KKazuhaK/anteater-mcp.git /home/anteater/anteater-mcp
-node -v   # must be >= 18
+node -v   # must be Node 24 LTS
 ```
 
-No `npm install` — the server has no dependencies.
+No `npm install` is needed to run the source — the server has no runtime dependencies.
 
 Put the secrets in a root-owned file that the service reads:
 
@@ -64,7 +96,7 @@ ANTEATER_API_KEY=<your Anteater API secret key>
 EOF
 ```
 
-## 3. Run it under systemd
+## 4. Run it under systemd
 
 `/etc/systemd/system/anteater-mcp.service`:
 
@@ -108,7 +140,7 @@ curl -s localhost:8787/health
 The startup log tells you whether auth is on. If it warns that no token is set, stop and
 fix that before going further.
 
-## 4. Terminate TLS
+## 5. Terminate TLS
 
 **Caddy** gets a certificate on its own:
 
@@ -168,7 +200,7 @@ only their egress ranges on port 443. The current list is published at
 ranges from here, because they change. Note that this also blocks your own `curl` checks
 and any other MCP client you use from a laptop.
 
-## 5. Add it to Claude
+## 6. Add it to Claude
 
 On **claude.ai in a browser** (not the phone):
 
@@ -184,7 +216,7 @@ show up alongside the tools. Try:
 
 > *"What GE-2 courses are still open for Fall that end before 5pm, and which grades best?"*
 
-## 6. Keeping it current
+## 7. Keeping it current
 
 ```bash
 sudo -u anteater git -C /home/anteater/anteater-mcp pull

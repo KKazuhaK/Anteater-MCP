@@ -131,6 +131,38 @@ await test("every tool is annotated read-only", async () => {
   }
 });
 
+await test("every tool name is verb_noun with an approved verb", async () => {
+  // A directory review marked this server down for naming consistency: six tools had
+  // no verb at all. Encode the convention so it cannot drift back.
+  const VERBS = ["list", "search", "get", "check", "recommend"];
+  const r = await send([{ jsonrpc: "2.0", id: 1, method: "tools/list" }]);
+  for (const t of r.messages[0].result.tools) {
+    assert.match(t.name, /^[a-z]+(_[a-z0-9]+)+$/, `${t.name}: not snake_case`);
+    const verb = t.name.split("_")[0];
+    assert.ok(VERBS.includes(verb), `${t.name}: "${verb}" is not one of ${VERBS.join(", ")}`);
+  }
+});
+
+await test("confusable tool pairs cross-reference each other", async () => {
+  // The same review flagged these two pairs as pickable-wrongly. Each description
+  // must name its counterpart so a model has the distinction in front of it.
+  const r = await send([{ jsonrpc: "2.0", id: 1, method: "tools/list" }]);
+  const byName = new Map(r.messages[0].result.tools.map((t) => [t.name, t.description]));
+  const PAIRS = [
+    ["get_course_grades", "get_instructor"],
+    ["get_instructor", "get_course_grades"],
+    ["get_sample_program", "get_program_requirements"],
+    ["get_program_requirements", "get_sample_program"],
+  ];
+  for (const [tool, mustMention] of PAIRS) {
+    assert.ok(byName.has(tool), `${tool} is missing`);
+    assert.ok(
+      byName.get(tool).includes(mustMention),
+      `${tool} does not point at ${mustMention}`,
+    );
+  }
+});
+
 await test("prompts declare arguments and enforce the required ones", async () => {
   const list = await send([{ jsonrpc: "2.0", id: 1, method: "prompts/list" }]);
   const prompts = list.messages[0].result.prompts;
@@ -178,10 +210,12 @@ await test("HTTP transport enforces the token when one is set", async () => {
   const { spawn: sp } = await import("node:child_process");
   const token = "offline-test-token-0123456789";
   const port = 8931;
-  const srv = sp("node", ["anteater-mcp.mjs", "--http", "--port", String(port)], {
-    stdio: ["ignore", "ignore", "ignore"],
+  const srv = sp("node", ["anteater-mcp.mjs", "--http", "--host", "0.0.0.0", "--port", String(port)], {
+    stdio: ["ignore", "ignore", "pipe"],
     env: { ...process.env, ANTEATER_MCP_TOKEN: token },
   });
+  let stderr = "";
+  srv.stderr.on("data", (chunk) => (stderr += chunk));
   try {
     // Wait for the listener rather than sleeping a fixed amount.
     for (let i = 0; i < 50; i++) {
@@ -206,6 +240,7 @@ await test("HTTP transport enforces the token when one is set", async () => {
     assert.equal((await post("/mcp", { Authorization: `Bearer ${token}` })).status, 200, "correct bearer was rejected");
     assert.equal((await post(`/${token}/mcp`)).status, 200, "correct path token was rejected");
     assert.equal((await fetch(`http://127.0.0.1:${port}/health`)).status, 200, "health should stay open");
+    assert.doesNotMatch(stderr, /there is no authentication/, "authenticated public bind emitted a false warning");
   } finally {
     srv.kill();
   }

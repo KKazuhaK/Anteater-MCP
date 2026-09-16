@@ -19,9 +19,9 @@ if (!requestedOutput || (outputIndex !== -1 && !process.argv[outputIndex + 1])) 
   throw new Error("--output requires a path");
 }
 
-const major = Number(process.versions.node.split(".")[0]);
-if (major !== 24) {
-  throw new Error(`SEA releases must be built with Node 24 LTS; found ${process.version}`);
+const expectedNode = (await readFile(resolve(root, ".node-version"), "utf8")).trim();
+if (process.version !== `v${expectedNode}`) {
+  throw new Error(`SEA releases must use the pinned Node v${expectedNode}; found ${process.version}`);
 }
 
 await rm(workDir, { recursive: true, force: true });

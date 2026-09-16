@@ -1,0 +1,34 @@
+name: anteater-mcp
+
+services:
+  server:
+    image: ghcr.io/kkazuhak/anteater-mcp:${ANTEATER_MCP_IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:${ANTEATER_MCP_PORT:-8787}:8787"
+    environment:
+      ANTEATER_MCP_TOKEN: "${ANTEATER_MCP_TOKEN:?set ANTEATER_MCP_TOKEN in .env}"
+      ANTEATER_API_KEY: "${ANTEATER_API_KEY:-}"
+      ANTEATER_API_BASE: "${ANTEATER_API_BASE:-https://anteaterapi.com}"
+      ANTEATER_ALLOWED_ORIGINS: "${ANTEATER_ALLOWED_ORIGINS:-}"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    stop_grace_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

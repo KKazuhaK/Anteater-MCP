@@ -8,7 +8,8 @@ history, prerequisite trees, AP credit and degree requirements — and exposes t
 **17 tools, 6 guided prompts and 4 reference resources**, shaped around the questions
 students actually ask.
 
-**Zero dependencies.** One file, Node >= 18. No `npm install`, ever.
+**Zero runtime dependencies.** Run the source with Node 24 LTS, or download a standalone
+Linux, macOS or Windows executable that already contains the same Node runtime.
 
 ```
 "Find me a GE-2 for Fall that ends before 5pm and still has seats, ranked by how well people do."
@@ -27,6 +28,7 @@ LPS 31        INTRO INDUCT LOGIC   4      3.61  80%  2108  11         TuTh 14:00
 ```bash
 git clone https://github.com/KKazuhaK/anteater-mcp.git
 cd anteater-mcp
+node --version                         # Node 24 LTS
 node anteater-mcp.mjs --list-tools     # confirm it runs
 ```
 
@@ -39,6 +41,37 @@ Nothing else is required. An [API key](#api-key) is optional but recommended.
 ---
 
 ## Installing
+
+### Standalone binary
+
+Each [GitHub Release](https://github.com/KKazuhaK/anteater-mcp/releases) contains native
+archives for Linux, macOS and Windows on amd64 and arm64, plus `SHA256SUMS.txt`. These do
+not require Node.js:
+
+```bash
+# After downloading and extracting the archive for your platform:
+./anteater-mcp --version
+./anteater-mcp --list-tools
+```
+
+In an MCP client configuration, use the absolute path to `anteater-mcp` (or
+`anteater-mcp.exe`) as `command` and omit the `args` array. macOS archives are ad-hoc
+signed; public Developer ID signing and notarization are not yet configured.
+
+### Docker
+
+The published image supports Linux amd64 and arm64. Docker Desktop on macOS and Windows
+runs the same Linux image:
+
+```bash
+cp .env.example .env
+# Set ANTEATER_MCP_TOKEN in .env, then:
+docker compose up -d
+curl -fsS http://127.0.0.1:8787/health
+```
+
+The Compose service is non-root, read-only, capability-free and bound to loopback by
+default. See [DEPLOY.md](DEPLOY.md) before placing it behind public HTTPS.
 
 ### Claude Desktop
 
@@ -78,7 +111,7 @@ With an API key:
 }
 ```
 
-Restart Claude Desktop completely (quit, don't just close the window). You should see 16
+Restart Claude Desktop completely (quit, don't just close the window). You should see 17
 anteater tools, and the 6 prompts appear as slash commands.
 
 `claude_desktop_config.example.json` in this repo is the same thing, ready to copy.
@@ -197,7 +230,7 @@ the server negotiates down rather than echoing whatever it is sent.
 
 | Tool | What it answers |
 |---|---|
-| `find_sections` | **The workhorse.** Live sections for a term: times, instructor, room, seats, waitlist, final exam. Supports an *exclusive* day filter (`daysOnly`) and a blocked-window filter (`avoidDays` + `avoidStart`/`avoidEnd`) for "I work Monday afternoons" |
+| `search_sections` | **The workhorse.** Live sections for a term: times, instructor, room, seats, waitlist, final exam. Supports an *exclusive* day filter (`daysOnly`) and a blocked-window filter (`avoidDays` + `avoidStart`/`avoidEnd`) for "I work Monday afternoons" |
 | `recommend_courses` | **The one you want.** Filter by GE, days, time window and open seats; rank by historical GPA |
 | `search_courses` | What courses exist at all |
 | `get_course` | One course in full: description, prerequisites, restrictions, what it unlocks |
@@ -208,11 +241,11 @@ the server negotiates down rather than echoing whatever it is sent.
 
 | Tool | What it answers |
 |---|---|
-| `course_grades` | Grade distribution by instructor or by term — *"which professor should I take?"* |
-| `instructor_info` | A professor's courses and the grades they actually give |
-| `enrollment_history` | Day-by-day fill curves — *"will I get in?"* |
+| `get_course_grades` | Grade distribution by instructor or by term — *"which professor should I take?"* |
+| `get_instructor` | A professor's courses and the grades they actually give |
+| `get_enrollment_history` | Day-by-day fill curves — *"will I get in?"* |
 | `get_syllabi` | Links to syllabi from past offerings — real workload and grading breakdown |
-| `course_materials` | Required and recommended textbooks, with ISBNs and UCI Library links |
+| `get_course_materials` | Required and recommended textbooks, with ISBNs and UCI Library links |
 
 **Checking you can actually enrol**
 
@@ -220,7 +253,7 @@ the server negotiates down rather than echoing whatever it is sent.
 |---|---|
 | `check_prerequisites` | Walks the prerequisite tree against what you've completed |
 | `check_schedule` | Meeting conflicts, final-exam conflicts, total units, **and whether the set is actually enrollable** — missing discussions/labs, cancelled or full sections, TBA meetings |
-| `ap_credit` | What an AP score is worth: units, GE, courses cleared |
+| `get_ap_credit` | What an AP score is worth: units, GE, courses cleared |
 
 **Planning a degree**
 
@@ -228,7 +261,7 @@ the server negotiates down rather than echoing whatever it is sent.
 |---|---|
 | `get_program_requirements` | Degree requirement trees, including university-wide GE |
 | `list_programs` | Majors, minors, specializations |
-| `sample_program` | The catalogue's recommended quarter-by-quarter sequence |
+| `get_sample_program` | The catalogue's recommended quarter-by-quarter sequence |
 
 Four of these compute things the upstream API does not provide: prerequisite-tree
 evaluation, schedule conflict detection, the join between the live schedule and
@@ -335,7 +368,7 @@ node anteater-mcp.mjs --list-tools       # list every tool
 | Tools don't appear in Claude Desktop | The path must be **absolute**, and you must fully quit and reopen the app. Check the config parses: `node -e "require('./claude_desktop_config.json')"`. |
 | `Anteater API rate limit hit` | The anonymous quota is shared and replenishes hourly. Set `ANTEATER_API_KEY`. |
 | `search_courses` returns odd results | Fuzzy search needs a privileged key that ordinary keys are not granted; it falls back to substring matching and says so. Use the structured filters instead. |
-| `Too broad` from `find_sections` | A whole term is tens of thousands of sections. Add `department`, `courseNumber`, `ge`, `instructor` or `sectionCodes`. |
+| `Too broad` from `search_sections` | A whole term is tens of thousands of sections. Add `department`, `courseNumber`, `ge`, `instructor` or `sectionCodes`. |
 | `"2026 summer" is ambiguous` | UCI has three summer terms. Use `Summer1`, `Summer2` or `Summer10wk`. |
 | `Unknown department "..."` | Use `list_departments`, or read `anteater://reference/departments`. |
 | A course has no grade data | Recent quarters lag, and P/NP-only courses have none. |
@@ -346,8 +379,10 @@ node anteater-mcp.mjs --list-tools       # list every tool
 ## Development
 
 ```bash
-node test-offline.mjs   # 14 conformance tests; makes no API calls
-node test.mjs           # 33 live calls; needs a key in practice
+npm test                # 15 conformance tests; makes no API calls
+npm run test:live       # live calls; needs a key in practice
+npm ci                  # build tooling only; the shipped server has no runtime packages
+npm run build:sea       # standalone binary; requires the exact Node in .node-version
 ```
 
 [UPSTREAM.md](UPSTREAM.md) records the exact Anteater API version and the upstream commits
@@ -358,9 +393,20 @@ and something begins returning wrong or empty results.
 criteria, security checks and integration checks — written so someone who has never read
 the code can run it.
 
-CI runs the offline suite, a syntax check, tool loading, an OpenAPI structural check and
-a zero-dependency assertion across Node 18, 20, 22 and 24. **It deliberately makes no API
-calls**, so it never draws on the public rate limit.
+CI uses the same pinned Node 24 LTS release as Docker and native packaging. It runs the
+offline suite, syntax and OpenAPI checks, a standalone-executable smoke test, and a
+locked-down container protocol test. **It deliberately makes no live Anteater API calls**,
+so it never draws on the public rate limit.
+
+Pushing a tag that exactly matches `v` plus the `package.json` version builds six native
+executables, generates checksums and provenance attestations, pushes an amd64/arm64 image
+to GHCR, and publishes the GitHub Release. Stable tags update `:latest`; every release
+updates `:beta`; exact `:vX.Y.Z` tags are immutable.
+
+After the first image publish, set the GHCR package visibility to **Public** once. The
+workflow uses the scoped `GITHUB_TOKEN`; if repository policy blocks bot-created Releases,
+add a fine-grained `RELEASE_PAT` secret with Contents write access, matching the upstream
+project's fallback.
 
 ### Scope
 
@@ -387,7 +433,7 @@ papering over them, because the alternative is confident wrong advice.
   that on WebReg. Neither of ICSSC's own clients infers this either: AntAlmanac and
   PeterPortal both render sections as a flat list and leave the pairing to the student,
   which is good evidence the data simply is not there.
-- **Enrollment restrictions are not evaluated against you.** `find_sections` and
+- **Enrollment restrictions are not evaluated against you.** `search_sections` and
   `recommend_courses` surface the codes and their meanings; whether you satisfy
   "Major only" or "Graduate only" is enforced by the registrar.
 - **Transfer and community-college coursework is absent.** `check_prerequisites` reports
@@ -399,7 +445,7 @@ papering over them, because the alternative is confident wrong advice.
   often filed under `STAFF`. A small sample size makes an average GPA unreliable — the
   tools always print `n` so you can judge.
 - **Historical GPA is course-wide.** `recommend_courses` ranks by the average across all
-  past instructors, which may not be whoever is teaching this term. Use `course_grades`
+  past instructors, which may not be whoever is teaching this term. Use `get_course_grades`
   to check the specific instructor before deciding.
 
 ## Bugs found and fixed before release
@@ -418,7 +464,7 @@ that would actually have misled someone:
 | **`recommend_courses` forced `sectionType: Lec`** | Every seminar-only GE was invisible; GE-1A returned nothing at all. |
 | **`get_program_requirements` with `ugrad` always failed** | The endpoint has a required `id` parameter the tool never sent. |
 | **HTTP mode bound `0.0.0.0` without validating `Origin`** | While logging "listening on localhost". |
-| **Fall sorted as the earliest term of its year** | Reversed the chronology in `enrollment_history` and `course_grades`. |
+| **Fall sorted as the earliest term of its year** | Reversed the chronology in `get_enrollment_history` and `get_course_grades`. |
 
 A second round, driving the server through six realistic student scenarios end to end,
 found 54 more — 10 of them blockers. The worst:
@@ -427,11 +473,11 @@ found 54 more — 10 of them blockers. The worst:
 |---|---|
 | **`check_schedule` gave a clean all-clear to unenrollable schedules** | It checked only times. A lecture with no required lab, or a full or cancelled section, passed silently — the student would be rejected at WebReg. |
 | **`days` meant "meets on at least one of"** | A student who could only attend Tu/Th was shown three- and four-day courses, and courses whose mandatory labs were all MWF. |
-| **A bare instructor surname matched nothing** | `course_grades` blamed the course — "may be new or graded P/NP only" — for a professor with 1,642 grades on record. |
+| **A bare instructor surname matched nothing** | `get_course_grades` blamed the course — "may be new or graded P/NP only" — for a professor with 1,642 grades on record. |
 | **Degree requirements defaulted to the 2023–2024 catalogue** | Three years stale, with no indication, for a student on 2026–2027. |
 | **`check_prerequisites` silently dropped unrecognised courses** | Then printed a confident "NOT satisfied" for work the student had actually done. |
 | **`recommend_courses` hid restriction codes** | Its highest-ranked GE picks were courses the student could not enrol in. |
-| **`check_schedule` threw a raw `TypeError`** | When given the comma-separated string that `find_sections` documents for the same parameter name. |
+| **`check_schedule` threw a raw `TypeError`** | When given the comma-separated string that `search_sections` documents for the same parameter name. |
 
 Also fixed: inverted check marks in `NOT` prerequisite subtrees, course numbers lost for
 the 48 department codes containing a space, multi-byte UTF-8 corrupted across HTTP chunk

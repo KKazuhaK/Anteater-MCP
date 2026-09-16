@@ -1,0 +1,243 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      image: ${{ steps.release.outputs.image }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+      - name: Validate immutable inputs
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: npm run check:version
+      - name: Re-run release gates
+        run: |
+          npm ci
+          npm audit --audit-level=high
+          node --check anteater-mcp.mjs
+          npm test
+      - id: release
+        name: Resolve release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          owner=$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          repo=$(printf '%s' "${GITHUB_REPOSITORY#*/}" | tr '[:upper:]' '[:lower:]')
+          prerelease=false
+          [[ "${version}" == *-* ]] && prerelease=true
+          {
+            echo "tag=${tag}"
+            echo "version=${version}"
+            echo "prerelease=${prerelease}"
+            echo "image=ghcr.io/${owner}/${repo}"
+          } >> "${GITHUB_OUTPUT}"
+
+  binaries:
+    name: Build ${{ matrix.os }}/${{ matrix.arch }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux, arch: amd64, runner: ubuntu-24.04, ext: "" }
+          - { os: linux, arch: arm64, runner: ubuntu-24.04-arm, ext: "" }
+          - { os: darwin, arch: amd64, runner: macos-15-intel, ext: "" }
+          - { os: darwin, arch: arm64, runner: macos-15, ext: "" }
+          - { os: windows, arch: amd64, runner: windows-2025, ext: ".exe" }
+          - { os: windows, arch: arm64, runner: windows-11-arm, ext: ".exe" }
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Build standalone executable
+        run: npm run build:sea -- --output dist/anteater-mcp${{ matrix.ext }}
+      - name: Smoke-test on target runner
+        shell: node {0}
+        run: |
+          const { execFileSync } = require('node:child_process');
+          const binary = `dist/anteater-mcp${{ matrix.ext }}`;
+          const version = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
+          if (version !== 'anteater-mcp ${{ needs.validate.outputs.version }}') {
+            throw new Error(`unexpected version: ${version}`);
+          }
+          const tools = execFileSync(binary, ['--list-tools'], { encoding: 'utf8' });
+          if (!tools.includes('find_sections')) throw new Error('standalone binary did not list tools');
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: anteater-mcp-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/anteater-mcp${{ matrix.ext }}
+          if-no-files-found: error
+          retention-days: 3
+
+  package:
+    name: Package and attest release assets
+    needs: [validate, binaries]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: artifacts
+          pattern: anteater-mcp-*
+      - name: Create platform archives and checksums
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_date_epoch=$(git show -s --format=%ct HEAD)
+          mkdir -p dist stage
+          for dir in artifacts/anteater-mcp-*; do
+            platform="${dir#artifacts/anteater-mcp-}"
+            package="anteater-mcp_${RELEASE_TAG}_${platform}"
+            mkdir -p "stage/${package}"
+            if [[ "${platform}" == windows-* ]]; then
+              cp "${dir}/anteater-mcp.exe" "stage/${package}/"
+            else
+              cp "${dir}/anteater-mcp" "stage/${package}/"
+              chmod 0755 "stage/${package}/anteater-mcp"
+            fi
+            cp README.md DEPLOY.md LICENSE NOTICE .env.example claude_desktop_config.example.json \
+              "stage/${package}/"
+            find "stage/${package}" -exec touch -d "@${source_date_epoch}" {} +
+            if [[ "${platform}" == windows-* ]]; then
+              (cd stage && zip -Xqr "../dist/${package}.zip" "${package}")
+            else
+              tar --sort=name --mtime="@${source_date_epoch}" --owner=0 --group=0 --numeric-owner \
+                -C stage -czf "dist/${package}.tar.gz" "${package}"
+            fi
+          done
+          (cd dist && sha256sum anteater-mcp_* > SHA256SUMS.txt)
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: dist/*
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GHCR image and GitHub Release
+    needs: [validate, package]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-assets
+          path: dist
+      - name: Create or refresh draft release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          IMAGE: ${{ needs.validate.outputs.image }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "${RELEASE_TAG}" --json isDraft --jq .isDraft >/tmp/is-draft 2>/dev/null; then
+            test "$(cat /tmp/is-draft)" = true || { echo "release is already public" >&2; exit 1; }
+            gh release upload "${RELEASE_TAG}" dist/* --clobber
+          else
+            # Literal backticks are Markdown, not shell command substitution.
+            # shellcheck disable=SC2016
+            notes=$(printf 'Container image: `%s:%s`\n\nVerify downloads with `sha256sum -c SHA256SUMS.txt`.' \
+              "${IMAGE}" "${RELEASE_TAG}")
+            args=("${RELEASE_TAG}" dist/* --draft --verify-tag --title "${RELEASE_TAG}" \
+              --generate-notes --notes "${notes}")
+            [[ "${PRERELEASE}" == true ]] && args+=(--prerelease)
+            gh release create "${args[@]}"
+          fi
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        name: Build and push immutable multi-platform image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ needs.validate.outputs.image }}:${{ needs.validate.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+          build-args: |
+            VERSION=${{ needs.validate.outputs.version }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+      - name: Attest container image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ needs.validate.outputs.image }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+      - name: Promote rolling image channels
+        env:
+          IMAGE: ${{ needs.validate.outputs.image }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_ref="${IMAGE}@${{ steps.image.outputs.digest }}"
+          docker buildx imagetools create --tag "${IMAGE}:beta" "${source_ref}"
+          if [[ "${PRERELEASE}" == false ]]; then
+            docker buildx imagetools create --tag "${IMAGE}:latest" "${source_ref}"
+          fi
+      - name: Publish the verified draft
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${PRERELEASE}" == true ]]; then
+            gh release edit "${RELEASE_TAG}" --draft=false --prerelease
+          else
+            gh release edit "${RELEASE_TAG}" --draft=false --latest
+          fi

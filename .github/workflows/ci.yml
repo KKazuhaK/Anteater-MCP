@@ -5,53 +5,119 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # The README promises Node >= 18, so prove it on the floor and on current.
-        node: ['18', '20', '22', '24']
+    name: Node 24 conformance
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: ${{ matrix.node }}
+          node-version-file: .node-version
 
       - name: Syntax check
         run: node --check anteater-mcp.mjs
 
+      - name: Version consistency
+        run: npm run check:version
+
       - name: Tools load
         run: node anteater-mcp.mjs --list-tools
 
-      # Offline only: CI must never draw on Anteater API's public rate limit.
       - name: Offline conformance tests
-        run: node test-offline.mjs
+        run: npm test
 
-      - name: No dependencies crept in
+      - name: No runtime dependencies crept in
         run: |
-          if [ -d node_modules ]; then echo "node_modules committed"; exit 1; fi
-          node -e "
-            const p = require('./package.json');
-            for (const f of ['dependencies','peerDependencies','optionalDependencies']) {
-              if (p[f] && Object.keys(p[f]).length) { console.error('unexpected ' + f); process.exit(1) }
+          node - <<'NODE'
+          const p = require('./package.json');
+          for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies']) {
+            if (p[field] && Object.keys(p[field]).length) {
+              console.error(`unexpected runtime ${field}`);
+              process.exit(1);
             }
-            console.log('zero dependencies confirmed');
-          "
+          }
+          console.log('zero runtime dependencies confirmed');
+          NODE
 
-      - name: OpenAPI spec for ChatGPT Actions is well formed
+      - name: OpenAPI specification is well formed
         run: |
-          node -e "
-            const s = require('./gpt-actions-openapi.json');
-            const ops = Object.values(s.paths).map(p => p.get);
-            if (!s.servers?.[0]?.url) { console.error('missing servers'); process.exit(1) }
-            if (ops.length > 30) { console.error('GPT Actions allows at most 30 operations'); process.exit(1) }
-            const ids = ops.map(o => o.operationId);
-            if (new Set(ids).size !== ids.length) { console.error('duplicate operationId'); process.exit(1) }
-            for (const o of ops)
-              for (const prm of o.parameters || [])
-                if (!prm.schema?.type) { console.error('parameter without schema: ' + o.operationId + '.' + prm.name); process.exit(1) }
-            if (JSON.stringify(s).includes('\$ref')) { console.error('dangling \$ref'); process.exit(1) }
-            console.log(ops.length + ' operations, spec OK');
-          "
+          node - <<'NODE'
+          const s = require('./gpt-actions-openapi.json');
+          const ops = Object.values(s.paths).map((p) => p.get);
+          if (!s.servers?.[0]?.url) throw new Error('missing servers');
+          if (ops.length > 30) throw new Error('GPT Actions allows at most 30 operations');
+          const ids = ops.map((o) => o.operationId);
+          if (new Set(ids).size !== ids.length) throw new Error('duplicate operationId');
+          for (const op of ops) {
+            for (const parameter of op.parameters || []) {
+              if (!parameter.schema?.type) {
+                throw new Error(`parameter without schema: ${op.operationId}.${parameter.name}`);
+              }
+            }
+          }
+          if (JSON.stringify(s).includes('$ref')) throw new Error('dangling $ref');
+          console.log(`${ops.length} operations, spec OK`);
+          NODE
+
+  sea-smoke:
+    name: SEA packaging smoke test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run build:sea -- --output dist/anteater-mcp
+      - name: Exercise standalone binary
+        run: |
+          ./dist/anteater-mcp --version
+          ./dist/anteater-mcp --list-tools | grep -q '^search_sections'
+          ./dist/anteater-mcp --help | grep -q 'MCP over streamable HTTP'
+
+  container-smoke:
+    name: Container security and protocol smoke test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Build image
+        run: docker build --build-arg VERSION=ci --build-arg VCS_REF="${GITHUB_SHA}" -t anteater-mcp:ci .
+      - name: Exercise image
+        shell: bash
+        run: |
+          set -euo pipefail
+          token=ci-test-token-0123456789
+          cid=$(docker run -d --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            -e ANTEATER_MCP_TOKEN="${token}" -p 127.0.0.1:18787:8787 anteater-mcp:ci)
+          cleanup() { docker rm -f "${cid}" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 50); do
+            if curl -fsS http://127.0.0.1:18787/health >/dev/null; then break; fi
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18787/health | grep -q '"ok":true'
+
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"ping"}' \
+            http://127.0.0.1:18787/mcp)
+          test "${status}" = 401
+
+          curl -fsS -H "Authorization: Bearer ${token}" \
+            -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"ping"}' \
+            http://127.0.0.1:18787/mcp | grep -q '"result"'
+
+          test "$(docker inspect -f '{{.Config.User}}' "${cid}")" = node
+          test "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "${cid}")" = true

@@ -32,20 +32,20 @@ gh api repos/icssc/anteater-api/compare/b9ba984e9aa2a8683445936dc32acbfaadf527bd
 
 | Endpoint | Used by | Behaviour relied on |
 |---|---|---|
-| `/v2/rest/websoc` | `find_sections`, `check_schedule`, `recommend_courses` | Nesting `schools > departments > courses > sections`; `days` comma-separated and inclusive; `startTime`/`endTime` as at-or-after / at-or-before; `finalExam.month` **0-indexed** |
+| `/v2/rest/websoc` | `search_sections`, `check_schedule`, `recommend_courses` | Nesting `schools > departments > courses > sections`; `days` comma-separated and inclusive; `startTime`/`endTime` as at-or-after / at-or-before; `finalExam.month` **0-indexed** |
 | `/v2/rest/websoc/terms` | `list_terms`, completions | `shortName` like `2026 Fall` |
 | `/v2/rest/websoc/departments` | `list_departments`, all department resolution | `deptCode` values, some containing spaces |
 | `/v2/rest/websoc/syllabi` | `get_syllabi` | Takes `courseId`, **not** `department` + `courseNumber` |
 | `/v2/rest/courses`, `/courses/{id}` | `search_courses`, `get_course`, `check_prerequisites` | `prerequisiteTree` AND/OR/NOT shape with `prereqType` course/exam |
 | `/v2/rest/search` | `search_courses` (optional) | Requires a **privileged** key; ordinary keys get 401 `not permitted` |
-| `/v2/rest/grades/aggregateByOffering`, `aggregateByCourse`, `raw`| `course_grades`, `instructor_info`, `recommend_courses` | `instructor` matches WebSoc's shortened form (`SHINDLER, M.`) |
-| `/v2/rest/enrollmentHistory` | `enrollment_history` | **Parallel arrays** (`dates`, `totalEnrolledHistory`, …), `-1` meaning untracked |
-| `/v2/rest/instructors` | `instructor_info`, instructor resolution | `shortenedNames` array |
+| `/v2/rest/grades/aggregateByOffering`, `aggregateByCourse`, `raw`| `get_course_grades`, `get_instructor`, `recommend_courses` | `instructor` matches WebSoc's shortened form (`SHINDLER, M.`) |
+| `/v2/rest/enrollmentHistory` | `get_enrollment_history` | **Parallel arrays** (`dates`, `totalEnrolledHistory`, …), `-1` meaning untracked |
+| `/v2/rest/instructors` | `get_instructor`, instructor resolution | `shortenedNames` array |
 | `/v2/rest/calendar` | `list_terms` | `instructionStart/End`, `finalsStart/End`, `socAvailable` |
 | `/v2/rest/programs/*` | `list_programs`, `get_program_requirements` | Defaults to an old `catalogYear` unless one is passed; `ugradRequirements` needs a required `id` of `UC`/`GE`/`CHC4`/`CHC2` |
-| `/v2/rest/catalogue/sample-programs` | `sample_program` | `variations[].courses[]` keyed by `year`/`fall`/`winter`/`spring` |
-| `/v2/rest/apExams` | `ap_credit` | `catalogueName` matches the exam names in `prerequisiteTree` |
-| `/v2/rest/courseMaterials` | `course_materials` | Needs `department` **and** `courseNumber`; collapses the three summer sessions into `Summer` |
+| `/v2/rest/catalogue/sample-programs` | `get_sample_program` | `variations[].courses[]` keyed by `year`/`fall`/`winter`/`spring` |
+| `/v2/rest/apExams` | `get_ap_credit` | `catalogueName` matches the exam names in `prerequisiteTree` |
+| `/v2/rest/courseMaterials` | `get_course_materials` | Needs `department` **and** `courseNumber`; collapses the three summer sessions into `Summer` |
 
 ### Endpoints deliberately not wrapped
 

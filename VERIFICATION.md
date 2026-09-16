@@ -14,11 +14,11 @@ against. Matching the expected result is a pass. If it doesn't match, record the
 ```bash
 git clone https://github.com/KKazuhaK/anteater-mcp.git
 cd anteater-mcp
-node -v        # must be >= 18
+node -v        # must match .node-version (Node 24 LTS)
 ```
 
-**Do not run `npm install`** — this project has zero dependencies. If you find
-yourself installing packages, something is wrong.
+Running the server from source needs no install because it has zero runtime dependencies.
+Maintainers use `npm ci` only for the locked SEA release toolchain.
 
 **API key (needed for sections 2 and 3).** Anonymous calls to Anteater API share an
 hourly global quota that is easy to exhaust. Request a key at
@@ -49,7 +49,7 @@ set -a; . ./.env; set +a
 node test-offline.mjs
 ```
 
-**Expected:** all 15 items `ok`, final line `15 passed`, exit code 0.
+**Expected:** all 17 items `ok`, final line `17 passed`, exit code 0.
 
 <details><summary>What each test guards against</summary>
 
@@ -69,6 +69,8 @@ node test-offline.mjs
 | unknown prompt / resource are protocol errors | |
 | completions work offline and respect the 100-value cap | |
 | HTTP transport enforces the token when one is set | An exposed endpoint with no auth is an open proxy on your API quota |
+| every tool name is verb_noun with an approved verb | Six tools once had no verb, which a directory review marked down |
+| confusable tool pairs cross-reference each other | So a model picking between them has the distinction in front of it |
 </details>
 
 ---
@@ -84,7 +86,7 @@ node test.mjs
 **three** `[isError]` results, and they are the three deliberate error cases at the end:
 
 ```
-### tools/call:find_sections  [isError]     <- no narrowing filter; tells you to add department/ge/...
+### tools/call:search_sections  [isError]     <- no narrowing filter; tells you to add department/ge/...
 ### tools/call:get_course     [isError]     <- course "NOPE 999" does not exist
 ### tools/call:list_terms     [isError]     <- term "sometime" cannot be parsed
 ### tools/call:nonexistent_tool             <- RPC ERROR -32602
@@ -113,14 +115,14 @@ ask() { printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"
 ### 3.1 Summer terms must not resolve to Spring
 
 ```bash
-ask find_sections '{"term":"2026 Summer 1","department":"CS"}' | head -1
+ask search_sections '{"term":"2026 Summer 1","department":"CS"}' | head -1
 ```
 ✅ First line starts with **`2026 Summer1`**
 ❌ `2026 Spring` means the regression is back. This was the worst bug: no error, just a
 full Spring schedule presented as summer.
 
 ```bash
-ask find_sections '{"term":"2026 summer","department":"CS"}' | head -2
+ask search_sections '{"term":"2026 summer","department":"CS"}' | head -2
 ```
 ✅ Errors, explaining that UCI has three summer terms (Summer1 / Summer2 / Summer10wk)
 
@@ -155,7 +157,7 @@ ask recommend_courses '{"term":"2026 Fall","ge":"GE-1A","limit":6}'
 ### 3.5 Restriction codes must match the Registrar
 
 ```bash
-ask find_sections '{"term":"2026 Fall","department":"COMPSCI","courseNumber":"260P"}' | grep "Restriction codes"
+ask search_sections '{"term":"2026 Fall","department":"COMPSCI","courseNumber":"260P"}' | grep "Restriction codes"
 ```
 ✅ Output is **`Restriction codes: K=Graduate only; L=Major only`**
 ❌ `K=Cross-listed` is the regression. Likewise `X` must read
@@ -195,12 +197,12 @@ ask get_program_requirements '{"kind":"ugrad","block":"GE"}' | head -3
 
 ```bash
 ask get_syllabi '{"courseId":"CS 161"}' | head -4
-ask ap_credit '{"exam":"Calculus BC"}' | head -6
-ask sample_program '{"program":"Computer Science, B.S."}' | head -6
+ask get_ap_credit '{"exam":"Calculus BC"}' | head -6
+ask get_sample_program '{"program":"Computer Science, B.S."}' | head -6
 ```
-✅ `get_syllabi` lists past terms with Canvas links; `ap_credit` shows score rows with
+✅ `get_syllabi` lists past terms with Canvas links; `get_ap_credit` shows score rows with
 `Courses cleared` such as `(MATH 2A and MATH 2B or MATH 5A and MATH 5B)`, plus the
-`apScores key for check_prerequisites` line; `sample_program` prints a Freshman/Sophomore/
+`apScores key for check_prerequisites` line; `get_sample_program` prints a Freshman/Sophomore/
 Junior/Senior sequence
 ❌ Empty output or an error
 
@@ -224,7 +226,7 @@ ask check_schedule '{"term":"2026 Fall","sectionCodes":"34190,34191"}' | head -3
 ### 3.11 An exclusive day constraint must exclude impossible courses
 
 ```bash
-ask find_sections '{"term":"2026 Fall","department":"I&C SCI","courseNumber":"31","days":"TuTh","daysOnly":true}'
+ask search_sections '{"term":"2026 Fall","department":"I&C SCI","courseNumber":"31","days":"TuTh","daysOnly":true}'
 ```
 ✅ Returns no sections and explains
 `I&C SCI 31 — lecture fits, but all 9 Lab section(s) fall outside Tu/Th`
@@ -234,7 +236,7 @@ student who can only attend Tu/Th cannot take it at all.
 ### 3.12 A bare instructor surname must resolve
 
 ```bash
-ask course_grades '{"courseId":"COMPSCI 161","instructor":"Shindler"}' | head -2
+ask get_course_grades '{"courseId":"COMPSCI 161","instructor":"Shindler"}' | head -2
 ```
 ✅ Header reads `(SHINDLER, M.)` and real grade rows follow
 ❌ "No grade data ... the course may be new or graded P/NP only" — the grade endpoints
@@ -262,7 +264,7 @@ current student the wrong degree plan
 ### 3.15 Term ordering (Fall is the *latest* term of its year)
 
 ```bash
-ask enrollment_history '{"courseId":"COMPSCI 161"}' | head -6
+ask get_enrollment_history '{"courseId":"COMPSCI 161"}' | head -6
 ```
 ✅ Within a year, the order is **Fall → Summer → Spring → Winter** (newest first)
 ❌ Fall appearing last within its year
@@ -337,12 +339,42 @@ kill %1
 `/source` returns `302`
 ❌ Missing — anyone running a modified copy as a network service needs this to comply
 
-### 4.6 No dependencies crept in
+### 4.6 No runtime dependencies crept in
 
 ```bash
-test -d node_modules && echo "FAIL: node_modules exists" || echo "PASS: no node_modules"
-node -e "const p=require('./package.json');console.log(p.dependencies?'FAIL: has dependencies':'PASS: zero dependencies')"
+node -e "const p=require('./package.json');for(const k of ['dependencies','peerDependencies','optionalDependencies'])if(p[k]&&Object.keys(p[k]).length)throw Error(k);console.log('PASS: zero runtime dependencies')"
+npm run check:version
 ```
+
+✅ The dependency check passes, and the application, Node, Docker and tag versions agree
+❌ Runtime packages exist, or any version source has drifted
+
+### 4.7 Standalone packaging
+
+```bash
+npm ci
+npm audit --audit-level=high
+npm run build:sea
+./dist/anteater-mcp --version
+expected_version=$(node -p "require('./package.json').version")
+test "$(./dist/anteater-mcp --version)" = "anteater-mcp ${expected_version}"
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"ping"}' | ./dist/anteater-mcp
+```
+
+✅ The audit reports no high-severity issue, the embedded version matches `package.json`, and
+the last command returns a JSON-RPC `result`
+❌ SEA construction fails, the embedded version differs, or the binary cannot speak stdio
+
+### 4.8 Container hardening
+
+```bash
+docker build -t anteater-mcp:verify .
+docker run --rm anteater-mcp:verify --version
+docker inspect anteater-mcp:verify --format '{{.Config.User}}'
+```
+
+✅ The image builds, reports the application version, and the configured user is `node`
+❌ The image needs root or build-time packages, or the embedded health check is absent
 
 ---
 
@@ -399,5 +431,5 @@ These **must not** change. If they do, it's a bug:
 - Term parsing results, sort order, department code resolution
 
 ⚠️ **Section codes change every term.** If Fall 2026 has passed, look up current codes
-with `ask find_sections '{"term":"<current term>","department":"CHEM","courseNumber":"1LD"}'`
+with `ask search_sections '{"term":"<current term>","department":"CHEM","courseNumber":"1LD"}'`
 and substitute them for `40250` / `40364` in 3.2 and 3.3. Every other criterion holds.
