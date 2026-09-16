@@ -79,7 +79,7 @@ set -a; . ./.env; set +a
 node test.mjs
 ```
 
-**Expected:** 33 calls total (`initialize` + `tools/list` + 31 `tools/call`). Exactly
+**Expected:** 40 calls total (`initialize` + `tools/list` + 38 `tools/call`). Exactly
 **three** `[isError]` results, and they are the three deliberate error cases at the end:
 
 ```
@@ -203,7 +203,62 @@ ask sample_program '{"program":"Computer Science, B.S."}' | head -6
 Junior/Senior sequence
 ❌ Empty output or an error
 
-### 3.10 Term ordering (Fall is the *latest* term of its year)
+### 3.10 A schedule that cannot be enrolled must not get an all-clear
+
+```bash
+ask check_schedule '{"term":"2026 Fall","sectionCodes":["36045"]}' | tail -8
+```
+✅ Reports `I&C SCI 31: you picked the Lec but no Lab` and ends with
+`VERDICT: not ready to enrol`
+❌ `✓ No meeting-time conflicts` with no warning. WebReg rejects a lecture enrolled
+without its required lab, so a clean verdict here sends the student to a failed
+registration.
+
+```bash
+ask check_schedule '{"term":"2026 Fall","sectionCodes":"34190,34191"}' | head -3
+```
+✅ Works — a comma-separated string is accepted as well as an array
+❌ `TypeError: ... .map is not a function`
+
+### 3.11 An exclusive day constraint must exclude impossible courses
+
+```bash
+ask find_sections '{"term":"2026 Fall","department":"I&C SCI","courseNumber":"31","days":"TuTh","daysOnly":true}'
+```
+✅ Returns no sections and explains
+`I&C SCI 31 — lecture fits, but all 9 Lab section(s) fall outside Tu/Th`
+❌ Listing the TuTh lectures as if the course were takeable. Its labs are all MWF, so a
+student who can only attend Tu/Th cannot take it at all.
+
+### 3.12 A bare instructor surname must resolve
+
+```bash
+ask course_grades '{"courseId":"COMPSCI 161","instructor":"Shindler"}' | head -2
+```
+✅ Header reads `(SHINDLER, M.)` and real grade rows follow
+❌ "No grade data ... the course may be new or graded P/NP only" — the grade endpoints
+match on WebSoc's shortened form, and blaming the course for an unmatched name sends
+the student to the wrong conclusion
+
+### 3.13 Unrecognised completed coursework must be surfaced
+
+```bash
+ask check_prerequisites '{"courseId":"CS 161","completed":["I&C SCI 46:A","CC MATH 101:A"]}' | tail -6
+```
+✅ Warns that `CC MATH 101:A` was not recognised and could not satisfy anything
+❌ A confident verdict that silently ignored it — transfer coursework is not in this
+data at all
+
+### 3.14 Degree requirements must default to the current catalogue
+
+```bash
+ask get_program_requirements '{"programId":"BS-201"}' | head -1
+```
+✅ `catalog 20262027` (the year in effect today)
+❌ `catalog 20232024` — the API's own default is three years stale, which hands a
+current student the wrong degree plan
+
+### 3.15 Term ordering (Fall is the *latest* term of its year)
 
 ```bash
 ask enrollment_history '{"courseId":"COMPSCI 161"}' | head -6
@@ -302,7 +357,7 @@ real data
 Environment:  Node <version> / <OS> / API key: yes|no
 Section 1 offline:      9 passed PASS / FAIL <which items + actual output>
 Section 2 integration:  only 3 expected isError  PASS / FAIL <actual error text>
-Section 3 regressions:  3.1 PASS 3.2 PASS ... 3.10 <paste full output for failures>
+Section 3 regressions:  3.1 PASS 3.2 PASS ... 3.15 <paste full output for failures>
 Section 4 security:     4.1 4.2 4.3 4.4 4.5
 Section 5 integration:  5.1 5.2 / not tested
 ```

@@ -246,6 +246,37 @@ async function resolveCourseId(input) {
   return `${dept}${num}`.replace(/\s+/g, "");
 }
 
+/**
+ * Grade and enrollment endpoints match on WebSoc's shortened form ("SHINDLER, M.").
+ * A bare last name silently matches nothing, which used to be reported as "no data
+ * for this course". Resolve through the instructor directory first.
+ */
+async function resolveInstructor(input) {
+  if (!input) return undefined;
+  const raw = String(input).trim();
+  if (/^[A-Z][A-Z'\-\s]*,\s*[A-Z]/.test(raw)) return raw; // already shortened form
+  const list = await api("/v2/rest/instructors", { nameContains: raw, take: 5 }, 24 * 3600 * 1000).catch(() => []);
+  if (!list?.length) return raw;
+  const names = list.flatMap((i) => i.shortenedNames || []);
+  if (!names.length) return raw;
+  if (list.length > 1) {
+    throw new ApiError(
+      `"${input}" matches ${list.length} instructors: ` +
+        list.map((i) => `${i.name} (${(i.shortenedNames || [])[0] || i.ucinetid})`).join("; ") +
+        `. Re-run with one of the shortened names.`,
+    );
+  }
+  return names[0];
+}
+
+/** The catalogue year in effect today, e.g. "20262027". Fall starts a new one. */
+function currentCatalogYear() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const start = now.getMonth() >= 8 ? y : y - 1; // September onwards
+  return `${start}${start + 1}`;
+}
+
 /** Split a course id back into dept + number for endpoints that want them apart. */
 async function splitCourse(courseId) {
   const id = await resolveCourseId(courseId);
@@ -283,6 +314,30 @@ function parseDays(days) {
     i += 1; // skip separators
   }
   return out;
+}
+
+/** True when every meeting of this section falls inside the allowed day set. */
+function fitsDays(section, allowed) {
+  const set = new Set(allowed);
+  for (const m of section.meetings || []) {
+    if (m.timeIsTBA || !m.days) continue; // unscheduled: cannot judge, handled separately
+    for (const d of parseDays(m.days)) if (!set.has(d)) return false;
+  }
+  return true;
+}
+
+/** True when no meeting falls inside the blocked day+time window. */
+function avoidsWindow(section, days, startMin, endMin) {
+  const blocked = new Set(days);
+  for (const m of section.meetings || []) {
+    if (m.timeIsTBA || !m.startTime) continue;
+    const s0 = mins(m.startTime);
+    const e0 = mins(m.endTime);
+    for (const d of parseDays(m.days)) {
+      if (blocked.has(d) && s0 < endMin && startMin < e0) return false;
+    }
+  }
+  return true;
 }
 
 /** WebSoc wants a comma-separated list: "TuTh" -> "Tu,Th". */
@@ -415,6 +470,36 @@ function stripHtml(s) {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+/** Section types that are a graded standalone component rather than a companion. */
+const PRIMARY_TYPES = new Set(["Lec", "Sem", "Stu", "Tut", "Col", "Res", "Tap"]);
+const COMPANION_TYPES = new Set(["Dis", "Lab", "Qiz", "Act", "Fld"]);
+
+/**
+ * WebSoc does not publish which discussion belongs to which lecture. Some courses
+ * encode it in sectionNum (Lec "A" + Dis "A1"), others number companions
+ * independently (I&C SCI 31: Lec A/B, Lab 1-9). Return a group letter only when
+ * the convention is unambiguous, so callers can tell "verified" from "unknown".
+ */
+function sectionGroup(sectionNum) {
+  const m = String(sectionNum || "").match(/^([A-Za-z]+)\d*$/);
+  return m ? m[1].toUpperCase() : null;
+}
+
+/** Sort sections so a course's components always read in a stable, useful order. */
+function sortSections(rows) {
+  const rank = (t) => (PRIMARY_TYPES.has(t) ? 0 : COMPANION_TYPES.has(t) ? 1 : 2);
+  return rows.slice().sort(
+    (a, b) =>
+      (a.courseId || "").localeCompare(b.courseId || "") ||
+      rank(a.sectionType) - rank(b.sectionType) ||
+      String(a.sectionNum).localeCompare(String(b.sectionNum), undefined, { numeric: true }) ||
+      String(a.sectionCode).localeCompare(String(b.sectionCode)),
+  );
+}
+
+/** True when any meeting has no scheduled time. */
+const hasTBA = (s) => !s.meetings?.length || s.meetings.some((m) => m.timeIsTBA || !m.startTime);
 
 const trunc = (s, n) => (!s ? "" : s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
@@ -696,7 +781,14 @@ tool({
       }),
       instructor: str('Instructor last name, e.g. "Shindler".'),
       sectionCodes: str('Comma-separated 5-digit codes or ranges, e.g. "34190,34200-34210".'),
-      days: str('Section must meet on at least ONE of these days (not all), e.g. "MWF", "TuTh", "M".'),
+      days: str('Section must meet on at least ONE of these days, e.g. "MWF", "TuTh", "M". See daysOnly.'),
+      daysOnly: bool(
+        'If true, `days` becomes exclusive: only sections that meet SOLELY on those days are returned. ' +
+        'Use this for "I can only come to campus Tuesday and Thursday".',
+      ),
+      avoidDays: str('Days of a window you must keep free, e.g. "M,W". Use with avoidStart/avoidEnd.'),
+      avoidStart: str('Start of the blocked window, e.g. "13:00". Requires avoidDays.'),
+      avoidEnd: str('End of the blocked window, e.g. "18:00". Requires avoidDays.'),
       startAfter: str('Section must start at or after this time, e.g. "10:00" or "10am".'),
       endBefore: str('Section must end at or before this time, e.g. "17:00" or "5pm".'),
       division: str("Course level.", { enum: ["LowerDiv", "UpperDiv", "Graduate", "ANY"] }),
@@ -740,7 +832,9 @@ tool({
         ge: a.ge,
         instructorName: a.instructor,
         sectionCodes: a.sectionCodes,
-        days: normalizeDays(a.days),
+        // With daysOnly we need every section back in order to judge a course as a
+        // whole, so the day filter is applied here rather than by the API.
+        days: a.daysOnly ? undefined : normalizeDays(a.days),
         startTime: normalizeTime(a.startAfter),
         endTime: normalizeTime(a.endBefore),
         division: a.division,
@@ -753,8 +847,56 @@ tool({
       5 * 60 * 1000, // live seat counts: short cache
     );
 
-    let rows = flattenWebsoc(data);
-    if (!rows.length) return `No sections found for ${year} ${quarter} with those filters. Try relaxing them, or check the term with list_terms.`;
+    let rows = sortSections(flattenWebsoc(data));
+
+    const impossible = [];
+    if (a.daysOnly) {
+      if (!a.days) throw new ApiError("daysOnly needs `days` to say which days are allowed.");
+      const allowed = parseDays(String(a.days).replace(/[^A-Za-z]/g, ""));
+      // A course is only takeable if EVERY required component can fit. If the day
+      // filter wipes out a course's only discussions or labs, the lecture is not an
+      // option either — surfacing it alone is how a student builds an impossible plan.
+      const byCourse = new Map();
+      for (const r of rows) {
+        if (!byCourse.has(r.courseId)) byCourse.set(r.courseId, []);
+        byCourse.get(r.courseId).push(r);
+      }
+      const keep = new Set();
+      for (const [courseId, secs] of byCourse) {
+        const fitting = secs.filter((r) => fitsDays(r, allowed));
+        const offeredCompanions = secs.filter((r) => COMPANION_TYPES.has(r.sectionType));
+        const fittingCompanions = fitting.filter((r) => COMPANION_TYPES.has(r.sectionType));
+        const fittingPrimary = fitting.filter((r) => PRIMARY_TYPES.has(r.sectionType));
+        if (!fittingPrimary.length) continue;
+        if (offeredCompanions.length && !fittingCompanions.length) {
+          const types = [...new Set(offeredCompanions.map((x) => x.sectionType))].join("/");
+          impossible.push(
+            `${secs[0].deptCode} ${secs[0].courseNumber} — lecture fits, but all ${offeredCompanions.length} ` +
+              `${types} section(s) fall outside ${allowed.join("/")}`,
+          );
+          continue;
+        }
+        for (const r of fitting) keep.add(r.sectionCode);
+      }
+      rows = rows.filter((r) => keep.has(r.sectionCode));
+    }
+    if (a.avoidDays) {
+      const blocked = parseDays(String(a.avoidDays).replace(/[^A-Za-z]/g, ""));
+      if (!blocked.length) throw new ApiError(`Could not parse avoidDays "${a.avoidDays}".`);
+      const s0 = a.avoidStart ? Number(normalizeTime(a.avoidStart).split(":")[0]) * 60 + Number(normalizeTime(a.avoidStart).split(":")[1]) : 0;
+      const e0 = a.avoidEnd ? Number(normalizeTime(a.avoidEnd).split(":")[0]) * 60 + Number(normalizeTime(a.avoidEnd).split(":")[1]) : 24 * 60;
+      rows = rows.filter((r) => avoidsWindow(r, blocked, s0, e0));
+    }
+
+    if (!rows.length) {
+      return (
+        `No sections found for ${year} ${quarter} with those filters.` +
+        (impossible.length
+          ? `\n\nThese courses had a lecture that fits, but no discussion or lab that does:\n` +
+            impossible.map((x) => `  ${x}`).join("\n")
+          : ` Try relaxing them, or check the term with list_terms.`)
+      );
+    }
 
     const limit = Math.min(a.limit || 60, 300);
     const truncated = rows.length > limit;
@@ -776,7 +918,7 @@ tool({
       if (h.courseComment) out.push(`  note: ${trunc(stripHtml(h.courseComment), 220)}`);
       out.push(
         table(
-          ["Code", "Type", "Sec", "Units", "Meets", "Instructor", "Seats", "Status", "Final", "Restr"],
+          ["Code", "Type", "Sec", "Units", "Meets", "Instructor", "Seats", "Status", "Final", "Restr", "!"],
           secs.map((s) => {
             (s.restrictions || "").split(/[\s,]+/).filter(Boolean).forEach((c) => seenRestrictions.add(c));
             return [
@@ -790,6 +932,7 @@ tool({
               s.isCancelled ? "CANCELLED" : s.status,
               trunc(finalText(s.finalExam), 22),
               s.restrictions || "",
+              hasTBA(s) ? "TBA" : "",
             ];
           }),
         ).split("\n").map((l) => `  ${l}`).join("\n"),
@@ -797,10 +940,26 @@ tool({
       out.push("");
     }
 
+    if (impossible.length) {
+      out.push(`Excluded — cannot be taken within your day constraint:`);
+      for (const x of impossible) out.push(`  ${x}`);
+      out.push("");
+    }
+
     const legend = [...seenRestrictions].filter((c) => RESTRICTION_LEGEND[c]).map((c) => `${c}=${RESTRICTION_LEGEND[c]}`);
     if (legend.length) out.push(`Restriction codes: ${legend.join("; ")}`);
     if (truncated) out.push(`(Truncated — more sections matched. Narrow the filters or raise \`limit\`.)`);
-    out.push(`Seats shown as enrolled/capacity (wl:N = waitlist). Status is WebSoc's own OPEN/Waitl/FULL.`);
+    out.push(
+      `Seats shown as enrolled/capacity (wl:N = waitlist). Status is WebSoc's own OPEN/Waitl/FULL. ` +
+        `A "!" marks an unscheduled (TBA) meeting — it cannot be checked for conflicts.`,
+    );
+    if (rows.some((r) => COMPANION_TYPES.has(r.sectionType))) {
+      out.push(
+        `Most courses require a lecture AND its discussion/lab. WebSoc does not publish which ` +
+          `companion belongs to which lecture, so confirm the pairing on WebReg; check_schedule ` +
+          `will tell you if a component is missing entirely.`,
+      );
+    }
     out.push(ATTRIBUTION);
     return out.join("\n");
   },
@@ -835,9 +994,10 @@ tool({
     if (!department && !a.instructor) throw new ApiError("Provide courseId, or department, or instructor.");
 
     const groupBy = a.groupBy || "instructor";
+    const instructor = a.instructor ? await resolveInstructor(a.instructor) : undefined;
     const params = {
       department, courseNumber,
-      instructor: a.instructor,
+      instructor,
       year: a.year,
       quarter: a.quarter,
       excludePNP: a.excludePNP ? "true" : undefined,
@@ -863,14 +1023,22 @@ tool({
           return [term, b.gpaN ? (b.gpaSum / b.gpaN).toFixed(2) : "-", n, pct(b.a, n), pct(b.b, n), pct(b.c, n), pct(b.d + b.f, n), b.w];
         });
       return (
-        `Grades by term — ${department || ""} ${courseNumber || ""}${a.instructor ? ` (${a.instructor})` : ""}\n\n` +
+        `Grades by term — ${department || ""} ${courseNumber || ""}${instructor ? ` (${instructor})` : ""}\n\n` +
         table(["Term", "GPA", "n", "A", "B", "C", "D/F", "W"], rows) + `\n\n${ATTRIBUTION}`
       );
     }
 
     const path = groupBy === "course" ? "/v2/rest/grades/aggregateByCourse" : "/v2/rest/grades/aggregateByOffering";
     const list = await api(path, params, 24 * 3600 * 1000);
-    if (!list?.length) return "No grade data found for those filters. The course may be new or graded P/NP only.";
+    if (!list?.length) {
+      return (
+        `No grade data for those filters.` +
+        (instructor
+          ? ` Searched the instructor as "${instructor}". If that is not how WebSoc spells the name, ` +
+            `call instructor_info to find the exact form, or drop the instructor filter to see who has grade data.`
+          : ` The course may be new, or graded P/NP only, or the recent terms may not be published yet.`)
+      );
+    }
 
     const rows = list
       .map((g) => {
@@ -896,8 +1064,9 @@ tool({
     const wAvg = total ? rows.reduce((s, r) => s + (r.gpa || 0) * r.n, 0) / total : 0;
 
     return (
-      `Grades for ${department || ""} ${courseNumber || ""}${a.instructor ? ` (${a.instructor})` : ""} — ` +
-      `all terms on record, grouped by ${groupBy}\n` +
+      `Grades for ${department || ""} ${courseNumber || ""}${instructor ? ` (${instructor})` : ""} — ` +
+      `${a.year || a.quarter ? `filtered to ${[a.year, a.quarter].filter(Boolean).join(" ")}` : "all terms on record"}` +
+      `, grouped by ${groupBy}\n` +
       `Course-wide weighted average GPA: ${wAvg.toFixed(2)} across ${total} letter grades\n\n` +
       table([groupBy === "course" ? "Course" : "Instructor", "GPA", "n", "A", "B", "C", "D/F", "W", "P/NP"], rows.map((r) => r.row)) +
       `\n\nPercentages are of letter grades only (A–F); W and P/NP are counts. ` +
@@ -1002,7 +1171,12 @@ tool({
 
     const list = await api(
       "/v2/rest/enrollmentHistory",
-      { department, courseNumber, instructorName: a.instructor, year: a.year, quarter: a.quarter, sectionType: a.sectionType || "Lec" },
+      {
+        department, courseNumber,
+        instructorName: a.instructor ? await resolveInstructor(a.instructor) : undefined,
+        year: a.year, quarter: a.quarter,
+        sectionType: a.sectionType || "Lec",
+      },
       6 * 3600 * 1000,
     );
     if (!list?.length) return `No enrollment history for ${department} ${courseNumber || ""}.`;
@@ -1193,9 +1367,15 @@ tool({
     if (!c) throw new ApiError(`No course "${a.courseId}" (resolved to "${id}").`);
 
     const taken = {};
+    const unrecognized = [];
     for (const raw of a.completed || []) {
       const [cs, grade] = String(raw).split(":");
       const key = (await resolveCourseId(cs)).toUpperCase().replace(/\s+/g, "");
+      // A typo or a transfer-course name resolves to a plausible-looking id that
+      // matches nothing in the tree. Silently dropping it produced a confident
+      // "not satisfied" verdict for work the student had actually done.
+      const known = await api(`/v2/rest/courses/${encodeURIComponent(key)}`, {}, 24 * 3600 * 1000).catch(() => null);
+      if (!known) unrecognized.push(String(raw).trim());
       taken[key] = { grade: grade ? grade.trim().toUpperCase() : undefined };
     }
     const exams = {};
@@ -1210,6 +1390,13 @@ tool({
       L.push(r.lines.join("\n"));
       L.push("");
       L.push(r.ok === true ? "VERDICT: prerequisites satisfied ✓" : r.ok === false ? "VERDICT: prerequisites NOT satisfied ✗" : "VERDICT: cannot fully verify — supply grades for the courses marked ?");
+    }
+    if (unrecognized.length) {
+      L.push(
+        `\n⚠ Not recognised as UCI courses, so they could not satisfy anything above: ` +
+          `${unrecognized.join(", ")}. Check the spelling with search_courses. Transfer and ` +
+          `community-college coursework is not in this data at all — an advisor has to clear it.`,
+      );
     }
     if (c.corequisites) L.push(`\nCorequisite (take alongside): ${c.corequisites}`);
     if (c.restriction) L.push(`\n⚠ Enrollment restriction (not checkable here): ${c.restriction}`);
@@ -1233,18 +1420,23 @@ tool({
       sectionCodes: {
         type: "array",
         items: { type: "string" },
-        description: 'The 5-digit section codes to combine, e.g. ["34190","34191","30020"].',
+        description: 'The 5-digit section codes to combine, e.g. ["34190","34191","30020"]. A comma-separated string is also accepted.',
       },
     },
     required: ["term", "sectionCodes"],
   },
   async run(a) {
     const { year, quarter } = parseTerm(a.term);
-    const codes = (a.sectionCodes || []).map((c) => String(c).trim()).filter(Boolean);
+    // Accept either an array or the comma-separated string find_sections documents
+    // for a parameter of the same name; passing a string used to throw a raw TypeError.
+    const raw = Array.isArray(a.sectionCodes)
+      ? a.sectionCodes
+      : String(a.sectionCodes ?? "").split(",");
+    const codes = raw.map((c) => String(c).trim()).filter(Boolean);
     if (!codes.length) throw new ApiError("Provide at least one section code.");
 
     const data = await api("/v2/rest/websoc", { year, quarter, sectionCodes: codes.join(","), cancelledCourses: "Include" }, 5 * 60 * 1000);
-    const rows = flattenWebsoc(data);
+    const rows = sortSections(flattenWebsoc(data));
     const found = new Set(rows.map((r) => r.sectionCode));
     const missing = codes.filter((c) => !found.has(c));
 
@@ -1344,6 +1536,92 @@ tool({
     if (finalConflicts.length) L.push(`✗ FINAL EXAM CONFLICT(S):`, ...finalConflicts.map((c) => `  ${c}`));
     else if (finals.length) L.push("✓ No final exam conflicts.");
 
+    // ---- Enrollability, which is NOT the same thing as conflict-freedom --------
+    // WebReg rejects a lecture enrolled without its required discussion or lab, and
+    // rejects a companion from a different lecture's group. WebSoc publishes no
+    // lecture-to-companion mapping, so report what is missing and be explicit about
+    // what cannot be checked rather than printing a bare all-clear.
+    const warnings = [];
+    const selectedByCourse = new Map();
+    for (const s of rows) {
+      if (!selectedByCourse.has(s.courseId)) selectedByCourse.set(s.courseId, []);
+      selectedByCourse.get(s.courseId).push(s);
+    }
+
+    let pairingUncheckable = false;
+    for (const [courseId, picked] of selectedByCourse) {
+      const head = picked[0];
+      const full = await api(
+        "/v2/rest/websoc",
+        { year, quarter, department: head.deptCode, courseNumber: head.courseNumber, cancelledCourses: "Include" },
+        5 * 60 * 1000,
+      ).then(flattenWebsoc).catch(() => []);
+
+      const offeredCompanions = full.filter((x) => COMPANION_TYPES.has(x.sectionType));
+      const pickedPrimary = picked.filter((x) => PRIMARY_TYPES.has(x.sectionType));
+      const pickedCompanions = picked.filter((x) => COMPANION_TYPES.has(x.sectionType));
+      const label = `${head.deptCode} ${head.courseNumber}`;
+
+      if (pickedPrimary.length && offeredCompanions.length && !pickedCompanions.length) {
+        const types = [...new Set(offeredCompanions.map((x) => x.sectionType))].join("/");
+        warnings.push(
+          `${label}: you picked the ${pickedPrimary[0].sectionType} but no ${types}. ` +
+            `This course offers ${offeredCompanions.length} ${types} section(s) and WebReg will reject the lecture alone.`,
+        );
+      }
+      if (pickedCompanions.length && !pickedPrimary.length) {
+        warnings.push(`${label}: you picked a ${pickedCompanions[0].sectionType} but no lecture/seminar for it.`);
+      }
+      if (pickedPrimary.length && pickedCompanions.length) {
+        const pg = sectionGroup(pickedPrimary[0].sectionNum);
+        const mismatched = pickedCompanions.filter((c) => {
+          const cg = sectionGroup(c.sectionNum);
+          return pg && cg && cg !== pg;
+        });
+        if (mismatched.length) {
+          warnings.push(
+            `${label}: ${mismatched.map((m) => `${m.sectionCode} (${m.sectionNum})`).join(", ")} ` +
+              `belongs to group ${sectionGroup(mismatched[0].sectionNum)}, but you picked ${pickedPrimary[0].sectionType} ${pickedPrimary[0].sectionNum}.`,
+          );
+        } else if (!pg || pickedCompanions.some((c) => !sectionGroup(c.sectionNum))) {
+          pairingUncheckable = true;
+        }
+      }
+    }
+
+    const tba = rows.filter(hasTBA);
+    const cancelled = rows.filter((s) => s.isCancelled);
+    const full_ = rows.filter((s) => !s.isCancelled && /full/i.test(s.status || ""));
+
+    if (cancelled.length) warnings.push(`CANCELLED: ${cancelled.map((s) => `${s.sectionCode} ${s.deptCode} ${s.courseNumber}`).join(", ")}`);
+    if (full_.length) warnings.push(`No seats: ${full_.map((s) => `${s.sectionCode} (${s.status})`).join(", ")} — you would be joining a waitlist or locked out.`);
+    if (tba.length) {
+      warnings.push(
+        `Unscheduled meetings, EXCLUDED from the conflict check: ` +
+          `${tba.map((s) => `${s.sectionCode} ${s.deptCode} ${s.courseNumber}`).join(", ")}. ` +
+          `A TBA time can still collide once it is published.`,
+      );
+    }
+
+    if (warnings.length) {
+      L.push("", `⚠ ${warnings.length} ENROLLMENT ISSUE(S):`, ...warnings.map((w) => `  ${w}`));
+    }
+    if (pairingUncheckable) {
+      L.push(
+        "",
+        `Note: WebSoc does not publish which discussion or lab belongs to which lecture, and ` +
+          `this course does not encode it in the section number. Confirm the pairing on WebReg.`,
+      );
+    }
+
+    L.push(
+      "",
+      conflicts.length || finalConflicts.length || warnings.length
+        ? `VERDICT: not ready to enrol — resolve the items above first.`
+        : `VERDICT: no conflicts and no missing components detected. This checks times, finals and ` +
+          `course components only; it cannot check your major, prerequisites or registration window.`,
+    );
+
     L.push(`\n${ATTRIBUTION}`);
     return L.join("\n");
   },
@@ -1413,9 +1691,10 @@ tool({
     for (const r of rows) {
       const key = `${r.deptCode}|${r.courseNumber}`;
       const seats = Math.max(0, Number(r.maxCapacity || 0) - Number(r.numCurrentlyEnrolled?.totalEnrolled || 0));
-      const cur = byCourse.get(key) || { deptCode: r.deptCode, courseNumber: r.courseNumber, title: r.courseTitle, sections: 0, seats: 0, units: r.units, meets: [], codes: [], sectionTypes: new Set() };
+      const cur = byCourse.get(key) || { deptCode: r.deptCode, courseNumber: r.courseNumber, title: r.courseTitle, sections: 0, seats: 0, units: r.units, meets: [], codes: [], sectionTypes: new Set(), restrictions: new Set() };
       cur.sections += 1;
       cur.seats += seats;
+      for (const code of (r.restrictions || "").split(/[\s,]+/).filter(Boolean)) cur.restrictions.add(code);
       if (cur.meets.length < 3) cur.meets.push(meetingText(r.meetings));
       cur.sectionTypes.add(r.sectionType);
       if (cur.codes.length < 3) cur.codes.push(r.sectionCode);
@@ -1444,7 +1723,7 @@ tool({
       ` — ${availability}, ranked by ${sortBy}\n` +
       `${list.length} course(s) matched; showing ${shown.length}.\n\n` +
       table(
-        ["Course", "Title", "Units", "GPA", "A%", "n", "Type", "Secs", "SeatsOpen", "Example meeting", "Code"],
+        ["Course", "Title", "Units", "GPA", "A%", "n", "Type", "Secs", "SeatsOpen", "Restr", "Example meeting", "Code"],
         shown.map((c) => [
           `${c.deptCode} ${c.courseNumber}`,
           trunc(c.title, 32),
@@ -1455,11 +1734,21 @@ tool({
           [...c.sectionTypes].join("/"),
           c.sections,
           c.seats,
+          [...c.restrictions].join("") || "",
           trunc(c.meets[0] || "", 30),
           c.codes[0],
         ]),
       ) +
-      `\n\nGPA/A%/n are historical across all past offerings of the course (all instructors), not this term's. ` +
+      (() => {
+        const seen = new Set(shown.flatMap((c) => [...c.restrictions]));
+        const legend = [...seen].filter((x) => RESTRICTION_LEGEND[x]).map((x) => `${x}=${RESTRICTION_LEGEND[x]}`);
+        return legend.length
+          ? `\n\nRestriction codes above: ${legend.join("; ")}. A restriction you do not satisfy ` +
+            `means you cannot enrol, however good the GPA looks.`
+          : "";
+      })() +
+      `\n\nGPA/A%/n are historical across all past offerings of the course (all instructors), not this term's, ` +
+      `and not specific to whoever is teaching it now — use course_grades to check that. ` +
       `A low n means an unreliable average. Use course_grades to compare instructors, find_sections for all ` +
       `sections of a course, and check_schedule to test for conflicts.\n${ATTRIBUTION}`
     );
@@ -1516,7 +1805,7 @@ tool({
         enum: ["UC", "GE", "CHC4", "CHC2"],
       }),
       specializationId: str("Optional specialization id to include."),
-      catalogYear: str('Optional catalog year, e.g. "20252026".'),
+      catalogYear: str('Catalog year, e.g. "20262027". Defaults to the one in effect today; pass the year you matriculated under if different.'),
     },
   },
   async run(a) {
@@ -1530,7 +1819,17 @@ tool({
     const data =
       kind === "ugrad"
         ? await api("/v2/rest/programs/ugradRequirements", { id: a.block || "GE", catalogYear: a.catalogYear }, 24 * 3600 * 1000)
-        : await api(`/v2/rest/programs/${kind}`, { programId: a.programId, specializationId: a.specializationId, catalogYear: a.catalogYear }, 24 * 3600 * 1000);
+        : await api(
+            `/v2/rest/programs/${kind}`,
+            {
+              programId: a.programId,
+              specializationId: a.specializationId,
+              // The API defaults to an old catalogue, which hands a current student
+              // the wrong degree plan without ever saying so.
+              catalogYear: a.catalogYear || currentCatalogYear(),
+            },
+            24 * 3600 * 1000,
+          );
 
     const L = [];
     const render = (reqs, depth = 0) => {
@@ -1557,7 +1856,14 @@ tool({
       L.push(`UCI undergraduate requirements`);
       render(data.requirements || data);
     } else {
+      const asked = a.catalogYear || currentCatalogYear();
       L.push(`${data.name} (${data.id})  catalog ${data.catalogYear || "?"}`);
+      if (data.catalogYear && data.catalogYear !== asked) {
+        L.push(
+          `⚠ You asked for ${asked} but the API served ${data.catalogYear} — that catalogue year ` +
+            `is not published for this program. Requirements may have changed since.`,
+        );
+      }
       L.push("");
       render(data.requirements);
       if (data.specializations?.length) L.push(`\nSpecializations: ${data.specializations.map((s) => `${s.name} (${s.id})`).join("; ")}`);

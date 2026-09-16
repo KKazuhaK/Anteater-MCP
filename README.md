@@ -161,7 +161,7 @@ the server negotiates down rather than echoing whatever it is sent.
 
 | Tool | What it answers |
 |---|---|
-| `find_sections` | **The workhorse.** Live sections for a term: times, instructor, room, seats, waitlist, final exam |
+| `find_sections` | **The workhorse.** Live sections for a term: times, instructor, room, seats, waitlist, final exam. Supports an *exclusive* day filter (`daysOnly`) and a blocked-window filter (`avoidDays` + `avoidStart`/`avoidEnd`) for "I work Monday afternoons" |
 | `recommend_courses` | **The one you want.** Filter by GE, days, time window and open seats; rank by historical GPA |
 | `search_courses` | What courses exist at all |
 | `get_course` | One course in full: description, prerequisites, restrictions, what it unlocks |
@@ -182,7 +182,7 @@ the server negotiates down rather than echoing whatever it is sent.
 | Tool | What it answers |
 |---|---|
 | `check_prerequisites` | Walks the prerequisite tree against what you've completed |
-| `check_schedule` | Meeting conflicts, final-exam conflicts and total units for a set of section codes |
+| `check_schedule` | Meeting conflicts, final-exam conflicts, total units, **and whether the set is actually enrollable** — missing discussions/labs, cancelled or full sections, TBA meetings |
 | `ap_credit` | What an AP score is worth: units, GE, courses cleared |
 
 **Planning a degree**
@@ -321,6 +321,32 @@ nothing is worse than not having one.
 
 ---
 
+## Known limitations
+
+These are properties of the upstream data, not bugs. The server states them rather than
+papering over them, because the alternative is confident wrong advice.
+
+- **WebSoc does not publish which discussion belongs to which lecture.** Some courses
+  encode it in the section number (`Lec A` → `Dis A1`), others number companions
+  independently (`I&C SCI 31`: lectures A/B, labs 1–9). `check_schedule` therefore tells
+  you when a required component is *missing entirely*, and when a pairing *cannot be
+  verified* — but it cannot confirm that a given lab goes with a given lecture. Confirm
+  that on WebReg.
+- **Enrollment restrictions are not evaluated against you.** `find_sections` and
+  `recommend_courses` surface the codes and their meanings; whether you satisfy
+  "Major only" or "Graduate only" is enforced by the registrar.
+- **Transfer and community-college coursework is absent.** `check_prerequisites` reports
+  any completed course it does not recognise instead of silently ignoring it, but only an
+  advisor can clear transfer credit.
+- **No registration-window dates.** The academic calendar covers instruction and finals;
+  it does not say when your enrollment window opens. Check StudentAccess.
+- **Grade data lags.** Recent quarters may be missing, and a recent term's grades are
+  often filed under `STAFF`. A small sample size makes an average GPA unreliable — the
+  tools always print `n` so you can judge.
+- **Historical GPA is course-wide.** `recommend_courses` ranks by the average across all
+  past instructors, which may not be whoever is teaching this term. Use `course_grades`
+  to check the specific instructor before deciding.
+
 ## Bugs found and fixed before release
 
 A six-dimension parallel review (logic, MCP conformance, live-API contract, security,
@@ -338,6 +364,19 @@ that would actually have misled someone:
 | **`get_program_requirements` with `ugrad` always failed** | The endpoint has a required `id` parameter the tool never sent. |
 | **HTTP mode bound `0.0.0.0` without validating `Origin`** | While logging "listening on localhost". |
 | **Fall sorted as the earliest term of its year** | Reversed the chronology in `enrollment_history` and `course_grades`. |
+
+A second round, driving the server through six realistic student scenarios end to end,
+found 54 more — 10 of them blockers. The worst:
+
+| Bug | Consequence |
+|---|---|
+| **`check_schedule` gave a clean all-clear to unenrollable schedules** | It checked only times. A lecture with no required lab, or a full or cancelled section, passed silently — the student would be rejected at WebReg. |
+| **`days` meant "meets on at least one of"** | A student who could only attend Tu/Th was shown three- and four-day courses, and courses whose mandatory labs were all MWF. |
+| **A bare instructor surname matched nothing** | `course_grades` blamed the course — "may be new or graded P/NP only" — for a professor with 1,642 grades on record. |
+| **Degree requirements defaulted to the 2023–2024 catalogue** | Three years stale, with no indication, for a student on 2026–2027. |
+| **`check_prerequisites` silently dropped unrecognised courses** | Then printed a confident "NOT satisfied" for work the student had actually done. |
+| **`recommend_courses` hid restriction codes** | Its highest-ranked GE picks were courses the student could not enrol in. |
+| **`check_schedule` threw a raw `TypeError`** | When given the comma-separated string that `find_sections` documents for the same parameter name. |
 
 Also fixed: inverted check marks in `NOT` prerequisite subtrees, course numbers lost for
 the 48 department codes containing a space, multi-byte UTF-8 corrupted across HTTP chunk

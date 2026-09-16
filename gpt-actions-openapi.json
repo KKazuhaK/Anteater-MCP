@@ -315,8 +315,11 @@
                       "type": "boolean"
                     },
                     "data": {
-                      "type": "object",
-                      "description": "Result payload; shape varies by endpoint."
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Result rows; item shape varies by endpoint."
                     }
                   }
                 }
@@ -401,8 +404,11 @@
                       "type": "boolean"
                     },
                     "data": {
-                      "type": "object",
-                      "description": "Result payload; shape varies by endpoint."
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Result rows; item shape varies by endpoint."
                     }
                   }
                 }
@@ -556,8 +562,11 @@
                       "type": "boolean"
                     },
                     "data": {
-                      "type": "object",
-                      "description": "Result payload; shape varies by endpoint."
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Result rows; item shape varies by endpoint."
                     }
                   }
                 }
@@ -738,8 +747,11 @@
                       "type": "boolean"
                     },
                     "data": {
-                      "type": "object",
-                      "description": "Result payload; shape varies by endpoint."
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Result rows; item shape varies by endpoint."
                     }
                   }
                 }
@@ -881,8 +893,11 @@
                       "type": "boolean"
                     },
                     "data": {
-                      "type": "object",
-                      "description": "Result payload; shape varies by endpoint."
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Result rows; item shape varies by endpoint."
                     }
                   }
                 }
@@ -1000,8 +1015,11 @@
                       "type": "boolean"
                     },
                     "data": {
-                      "type": "object",
-                      "description": "Result payload; shape varies by endpoint."
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Result rows; item shape varies by endpoint."
                     }
                   }
                 }
@@ -1080,8 +1098,11 @@
                       "type": "boolean"
                     },
                     "data": {
-                      "type": "object",
-                      "description": "Result payload; shape varies by endpoint."
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Result rows; item shape varies by endpoint."
                     }
                   }
                 }
@@ -1186,8 +1207,11 @@
                       "type": "boolean"
                     },
                     "data": {
-                      "type": "object",
-                      "description": "Result payload; shape varies by endpoint."
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Result rows; item shape varies by endpoint."
                     }
                   }
                 }
