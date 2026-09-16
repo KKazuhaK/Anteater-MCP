@@ -85,7 +85,7 @@ await test("initialize honours a version we do implement", async () => {
 await test("every tool exposes a valid object inputSchema", async () => {
   const r = await send([{ jsonrpc: "2.0", id: 1, method: "tools/list" }]);
   const tools = r.messages[0].result.tools;
-  assert.equal(tools.length, 13);
+  assert.equal(tools.length, 16);
   for (const t of tools) {
     assert.equal(t.inputSchema.type, "object", `${t.name}: inputSchema is not an object`);
     assert.ok(t.description?.length > 40, `${t.name}: description too thin`);
@@ -103,6 +103,75 @@ await test("unknown tool is a protocol error, not a crash", async () => {
     { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "nope", arguments: {} } },
   ]);
   assert.equal(r.messages[0].error.code, -32602);
+});
+
+await test("declares every capability it implements, and no more", async () => {
+  const r = await send([{ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }]);
+  const caps = r.messages[0].result.capabilities;
+  for (const k of ["tools", "prompts", "resources", "completions"]) {
+    assert.ok(caps[k], `capability "${k}" not declared`);
+  }
+  // Anything declared must actually answer.
+  const probe = await send([
+    { jsonrpc: "2.0", id: 1, method: "tools/list" },
+    { jsonrpc: "2.0", id: 2, method: "prompts/list" },
+    { jsonrpc: "2.0", id: 3, method: "resources/list" },
+  ]);
+  assert.ok(probe.messages.find((m) => m.id === 1).result.tools.length);
+  assert.ok(probe.messages.find((m) => m.id === 2).result.prompts.length);
+  assert.ok(probe.messages.find((m) => m.id === 3).result.resources.length);
+  assert.ok(!caps.logging, "logging declared but not implemented");
+});
+
+await test("every tool is annotated read-only", async () => {
+  const r = await send([{ jsonrpc: "2.0", id: 1, method: "tools/list" }]);
+  for (const t of r.messages[0].result.tools) {
+    assert.equal(t.annotations?.readOnlyHint, true, `${t.name} not marked read-only`);
+    assert.equal(t.annotations?.destructiveHint, false, `${t.name} not marked non-destructive`);
+  }
+});
+
+await test("prompts declare arguments and enforce the required ones", async () => {
+  const list = await send([{ jsonrpc: "2.0", id: 1, method: "prompts/list" }]);
+  const prompts = list.messages[0].result.prompts;
+  assert.equal(prompts.length, 6);
+  for (const p of prompts) {
+    assert.ok(p.description?.length > 20, `${p.name}: description too thin`);
+    assert.ok(Array.isArray(p.arguments) && p.arguments.length, `${p.name}: no arguments declared`);
+  }
+  // Omitting a required argument must be refused rather than silently templated.
+  const bad = await send([
+    { jsonrpc: "2.0", id: 1, method: "prompts/get", params: { name: "find-easy-ge", arguments: { term: "2026 Fall" } } },
+  ]);
+  assert.equal(bad.messages[0].error.code, -32602);
+
+  const good = await send([
+    { jsonrpc: "2.0", id: 1, method: "prompts/get", params: { name: "find-easy-ge", arguments: { term: "2026 Fall", ge: "GE-2" } } },
+  ]);
+  const text = good.messages[0].result.messages[0].content.type === "text" && good.messages[0].result.messages[0].content.text;
+  assert.match(text, /GE-2/);
+  assert.match(text, /2026 Fall/);
+});
+
+await test("unknown prompt and unknown resource are protocol errors", async () => {
+  const r = await send([
+    { jsonrpc: "2.0", id: 1, method: "prompts/get", params: { name: "nope", arguments: {} } },
+    { jsonrpc: "2.0", id: 2, method: "resources/read", params: { uri: "anteater://nope" } },
+  ]);
+  assert.equal(r.messages.find((m) => m.id === 1).error.code, -32602);
+  assert.equal(r.messages.find((m) => m.id === 2).error.code, -32602);
+});
+
+await test("completions work offline and stay within the 100-value cap", async () => {
+  const r = await send([
+    { jsonrpc: "2.0", id: 1, method: "completion/complete", params: { ref: { type: "ref/prompt", name: "find-easy-ge" }, argument: { name: "ge", value: "GE-5" } } },
+    { jsonrpc: "2.0", id: 2, method: "completion/complete", params: { ref: { type: "ref/prompt", name: "find-easy-ge" }, argument: { name: "nonsense", value: "x" } } },
+  ]);
+  const ge = r.messages.find((m) => m.id === 1).result.completion;
+  assert.deepEqual(ge.values, ["GE-5A", "GE-5B"]);
+  assert.ok(ge.values.length <= 100);
+  // An argument with no completion source must return empty, not error.
+  assert.deepEqual(r.messages.find((m) => m.id === 2).result.completion.values, []);
 });
 
 await test("term parsing reaches all six quarters", async () => {

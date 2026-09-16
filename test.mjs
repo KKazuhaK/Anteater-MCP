@@ -20,6 +20,10 @@ const CALLS = [
   ["tools/call", { name: "recommend_courses", arguments: { term: "2026 Fall", ge: "GE-2", endBefore: "5pm", limit: 10 } }],
   ["tools/call", { name: "list_programs", arguments: { filter: "computer" } }],
   ["tools/call", { name: "get_program_requirements", arguments: { programId: "BS-201" } }],
+  ["tools/call", { name: "get_syllabi", arguments: { courseId: "CS 161" } }],
+  ["tools/call", { name: "ap_credit", arguments: { exam: "Calculus BC" } }],
+  ["tools/call", { name: "sample_program", arguments: { program: "Computer Science, B.S." } }],
+  ["tools/call", { name: "sample_program", arguments: {} }],
   // regressions for the pre-publication review findings
   ["tools/call", { name: "find_sections", arguments: { term: "2026 Summer 1", department: "CS" } }],          // parseTerm: was silently Spring
   ["tools/call", { name: "check_schedule", arguments: { term: "2026 Fall", sectionCodes: ["40250", "40364"] } }], // units: standalone lab was dropped; final exam month

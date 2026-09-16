@@ -1567,6 +1567,174 @@ tool({
   },
 });
 
+/* -- 14. get_syllabi ----------------------------------------------- */
+
+tool({
+  name: "get_syllabi",
+  title: "Find past syllabi for a course",
+  description:
+    "Links to syllabi from previous offerings of a course, by term and instructor. " +
+    "Use to show a student what the workload, grading breakdown and topics actually look like " +
+    "before they enroll. Links point at UCI Canvas and may require a UCInetID login.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      courseId: str('Course, e.g. "COMPSCI 161".'),
+      year: str('Restrict to a year, e.g. "2025".'),
+      quarter: str("Restrict to a quarter.", { enum: QUARTERS }),
+      instructor: str('Restrict to an instructor, e.g. "SHINDLER, M.".'),
+    },
+    required: ["courseId"],
+  },
+  async run(a) {
+    const id = await resolveCourseId(a.courseId);
+    const list = await api(
+      "/v2/rest/websoc/syllabi",
+      { courseId: id, year: a.year, quarter: a.quarter, instructor: a.instructor },
+      24 * 3600 * 1000,
+    );
+    if (!list?.length) return `No syllabi on record for ${a.courseId} (resolved to ${id}).`;
+
+    const rows = list
+      .slice()
+      .sort((x, y) => termSortKey(y.year, y.quarter).localeCompare(termSortKey(x.year, x.quarter)))
+      .map((x) => [`${x.year} ${x.quarter}`, (x.instructorNames || []).join(", ") || "(not listed)", x.url]);
+
+    return (
+      `Syllabi for ${id} (${list.length} on record, newest first)\n\n` +
+      table(["Term", "Instructor", "Link"], rows) +
+      `\n\nLinks are UCI Canvas pages and may need a UCInetID login.\n${ATTRIBUTION}`
+    );
+  },
+});
+
+/* -- 15. ap_credit ------------------------------------------------- */
+
+/** Render the AND/OR tree the AP reward endpoint uses for granted courses. */
+function renderGrant(node) {
+  if (!node) return "";
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) return node.map(renderGrant).filter(Boolean).join(", ");
+  if (node.AND) {
+    const parts = node.AND.map(renderGrant).filter(Boolean);
+    return parts.length ? parts.join(" and ") : "";
+  }
+  if (node.OR) {
+    const parts = node.OR.map(renderGrant).filter(Boolean);
+    return parts.length > 1 ? `(${parts.join(" or ")})` : parts[0] || "";
+  }
+  return "";
+}
+
+tool({
+  name: "ap_credit",
+  title: "What an AP exam is worth at UCI",
+  description:
+    "Look up what AP exam scores earn at UCI: units, elective units, GE categories and specific " +
+    "courses cleared. Use for incoming students planning a first quarter, or to work out whether " +
+    "an exam score already satisfies a prerequisite. " +
+    "The `catalogueName` in the output is the exact string check_prerequisites expects in apScores.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      exam: str('Exam name or part of one, e.g. "Calculus BC", "Computer Science". Omit to list all exams.'),
+    },
+  },
+  async run(a) {
+    const list = await api("/v2/rest/apExams", {}, 24 * 3600 * 1000);
+    const q = (a.exam || "").trim().toUpperCase();
+    const hits = q ? list.filter((e) => (e.fullName || "").toUpperCase().includes(q) || (e.catalogueName || "").toUpperCase().includes(q)) : list;
+
+    if (!hits.length) return `No AP exam matches "${a.exam}". Call ap_credit with no argument to list all ${list.length}.`;
+
+    if (!q || hits.length > 12) {
+      return (
+        `${hits.length} AP exams on record. Pass \`exam\` to see what one is worth.\n\n` +
+        hits.map((e) => `  ${e.fullName}`).join("\n")
+      );
+    }
+
+    const L = [];
+    for (const e of hits) {
+      L.push(`${e.fullName}`);
+      if (e.catalogueName) L.push(`  apScores key for check_prerequisites: "${e.catalogueName}"`);
+      const rows = (e.rewards || []).map((r) => {
+        const courses = renderGrant(r.coursesGranted);
+        const ge = Object.entries(r.geGranted || {}).map(([k, v]) => `${k}${v && v !== true ? ` x${v}` : ""}`).join(", ");
+        return [
+          (r.acceptableScores || []).join(", "),
+          r.unitsGranted ?? 0,
+          r.electiveUnitsGranted ?? 0,
+          ge || "-",
+          courses || "(no specific course)",
+        ];
+      });
+      L.push(table(["Score", "Units", "Elective", "GE", "Courses cleared"], rows).split("\n").map((x) => `  ${x}`).join("\n"));
+      L.push("");
+    }
+    L.push(`Higher score rows supersede lower ones. ${ATTRIBUTION}`);
+    return L.join("\n");
+  },
+});
+
+/* -- 16. sample_program -------------------------------------------- */
+
+tool({
+  name: "sample_program",
+  title: "Sample four-year plan for a major",
+  description:
+    "The catalogue's recommended quarter-by-quarter course sequence for a major. " +
+    "Use to answer 'what should I take first year?' or to sanity-check whether a student is on " +
+    "track. Call with no argument to list the majors that have a published plan.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      program: str('Program name or id, e.g. "Computer Science", "computerscience_bs". Omit to list all.'),
+    },
+  },
+  async run(a) {
+    const all = await api("/v2/rest/catalogue/sample-programs", {}, 24 * 3600 * 1000);
+    if (!a.program) {
+      return (
+        `${all.length} majors have a published sample program:\n\n` +
+        table(["id", "Program"], all.map((p) => [p.id, p.programName])) +
+        `\n\nPass \`program\` to see one.`
+      );
+    }
+
+    const q = a.program.trim().toUpperCase();
+    const hits = all.filter((p) => p.id.toUpperCase().includes(q.replace(/[^A-Z0-9_]/g, "")) || p.programName.toUpperCase().includes(q));
+    if (!hits.length) return `No sample program matches "${a.program}". Call sample_program with no argument to list all ${all.length}.`;
+    if (hits.length > 1) {
+      return (
+        `${hits.length} programs match "${a.program}":\n\n` +
+        table(["id", "Program"], hits.map((p) => [p.id, p.programName])) +
+        `\n\nRe-run with a specific id.`
+      );
+    }
+
+    const p = hits[0];
+    const L = [`${p.programName} — recommended sequence (${p.id})`];
+    for (const v of p.variations || []) {
+      if (v.label) L.push(`\nVariation: ${v.label}`);
+      for (const y of v.courses || []) {
+        L.push(`\n  ${y.year}`);
+        for (const term of ["fall", "winter", "spring"]) {
+          const items = (y[term] || []).map((c) => c.value).filter(Boolean);
+          if (items.length) L.push(`    ${term.padEnd(7)} ${items.join(", ")}`);
+        }
+      }
+    }
+    L.push(
+      `\nEntries like "General Education" are placeholders the catalogue leaves open — use ` +
+        `recommend_courses to fill them. This is the catalogue's suggestion, not a requirement; ` +
+        `get_program_requirements has the binding list.`,
+    );
+    L.push(ATTRIBUTION);
+    return L.join("\n");
+  },
+});
+
 /* ------------------------------------------------------------------ *
  * MCP protocol
  * ------------------------------------------------------------------ */
@@ -1576,14 +1744,219 @@ const INSTRUCTIONS = `Course search and registration planning for UC Irvine, bac
 Typical flow for "help me pick classes":
   1. list_terms — confirm which quarter the student means.
   2. recommend_courses or find_sections — find candidate sections that fit their constraints.
-  3. course_grades / instructor_info — compare professors.
-  4. enrollment_history — judge how hard the class is to get into.
-  5. check_prerequisites — confirm eligibility.
-  6. check_schedule — validate the final set of section codes for time and final-exam conflicts.
+  3. course_grades / instructor_info — compare professors; get_syllabi shows real workload.
+  4. enrollment_history — judge how hard the class is to get into and in what order to enrol.
+  5. check_prerequisites — confirm eligibility; ap_credit resolves AP-score substitutions.
+  6. check_schedule — validate the final section codes for meeting and final-exam conflicts.
 
-Notes: department codes are WebSoc codes (COMPSCI, I&C SCI, BIO SCI) — list_departments resolves them.
-Seat counts are live but cached briefly. Grade data is historical and lags a quarter or two.
-This is not an official UCI system; always tell the student to confirm on WebReg before registering.`;
+Degree planning: list_programs -> get_program_requirements for the binding rules, and
+sample_program for the catalogue's suggested sequence. get_program_requirements with
+kind "ugrad" returns the university-wide GE requirements.
+
+Six prompts package these flows end to end: plan-quarter, pick-professor, find-easy-ge,
+check-my-schedule, can-i-take, degree-check. Prefer them when the request matches.
+
+Four resources hold reference tables, so you never have to guess a code:
+anteater://reference/{departments,terms,ge-categories,restriction-codes}.
+
+Gotchas: department codes are WebSoc codes (COMPSCI, I&C SCI, BIO SCI) — list_departments
+resolves "CS". A bare "summer" is ambiguous; UCI has Summer1, Summer2 and Summer10wk.
+Seat counts are live but cached ~5 minutes. Grade data is historical and lags a quarter
+or two, and a small sample size makes an average GPA unreliable — always report it.
+Enrollment restrictions (major-only, graduate-only) are enforced by the registrar and are
+NOT visible in the prerequisite tree, so surface them separately.
+
+This is not an official UCI system. Always tell the student to confirm on WebReg before
+registering, and attribute the data to Anteater API.`;
+
+// Category names from the UCI General Catalogue's bachelor's degree requirements.
+const GE_CATEGORIES = {
+  "GE-1A": "Ia — Lower-Division Writing",
+  "GE-1B": "Ib — Upper-Division Writing",
+  "GE-2": "II — Science and Technology",
+  "GE-3": "III — Social and Behavioral Sciences",
+  "GE-4": "IV — Arts and Humanities",
+  "GE-5A": "Va — Quantitative Literacy",
+  "GE-5B": "Vb — Formal Reasoning",
+  "GE-6": "VI — Language Other Than English",
+  "GE-7": "VII — Multicultural Studies",
+  "GE-8": "VIII — International/Global Issues",
+};
+
+/* ---- Prompts: the workflows a student actually wants ------------- */
+
+const arg = (name, description, required = false) => ({ name, description, required });
+
+const PROMPTS = [
+  {
+    name: "plan-quarter",
+    title: "Plan a quarter",
+    description: "Build a full, conflict-free schedule for one term from scratch.",
+    arguments: [arg("term", 'Which term, e.g. "2026 Fall".', true), arg("goals", 'What you need, e.g. "finish GE-2, one CS upper-div, nothing before 10am".')],
+    build: ({ term, goals }) =>
+      `Help me plan my schedule for ${term} at UCI.\n\n` +
+      `What I need: ${goals || "(ask me before assuming)"}\n\n` +
+      `Work through it in this order:\n` +
+      `1. list_terms to confirm ${term} has data and when instruction and finals fall.\n` +
+      `2. recommend_courses / find_sections to find candidates that fit my constraints.\n` +
+      `3. course_grades for any course I'm serious about, so I know which instructor to pick.\n` +
+      `4. enrollment_history for each one, so I know how hard it is to get a seat and in what order to enroll.\n` +
+      `5. check_prerequisites on anything with prerequisites — ask me what I have already taken.\n` +
+      `6. check_schedule on the final set of section codes to prove there are no meeting or final-exam conflicts.\n\n` +
+      `Give me the section codes to type into WebReg, the total units, and an enrollment order with the riskiest class first.`,
+  },
+  {
+    name: "pick-professor",
+    title: "Compare professors for a course",
+    description: "Compare the instructors who teach a course, by grades given and by who is actually teaching it.",
+    arguments: [arg("course", 'The course, e.g. "COMPSCI 161".', true), arg("term", 'Optional term to check who is teaching, e.g. "2026 Fall".')],
+    build: ({ course, term }) =>
+      `Which professor should I take for ${course} at UCI?\n\n` +
+      `1. course_grades for ${course}, grouped by instructor. Sort by average GPA but tell me the sample size for each — an average over 30 grades is noise next to one over 1500.\n` +
+      (term ? `2. find_sections for ${course} in ${term} to see who is actually teaching it and at what time.\n` : `2. find_sections to see who is currently teaching it.\n`) +
+      `3. instructor_info on the realistic candidates, to see how they grade across all their courses, not just this one.\n` +
+      `4. get_syllabi for past offerings so I can see the real workload and grading breakdown.\n\n` +
+      `Then give me a recommendation, and say plainly where the data is too thin to support one.`,
+  },
+  {
+    name: "find-easy-ge",
+    title: "Find a manageable GE",
+    description: "Find a GE course that fits your schedule and has a realistic grade distribution.",
+    arguments: [arg("term", 'Which term, e.g. "2026 Fall".', true), arg("ge", "Which GE category, e.g. GE-2.", true), arg("constraints", 'Timing constraints, e.g. "Tue/Thu only, nothing before 11am".')],
+    build: ({ term, ge, constraints }) =>
+      `Find me a ${ge} course for ${term} at UCI.\n\n` +
+      `Constraints: ${constraints || "(none given — ask me)"}\n\n` +
+      `Use recommend_courses with the ge, day and time filters and availability OpenOnly, ranked by GPA. ` +
+      `Then for the top few, use course_grades to check whether the good average holds for the instructor ` +
+      `actually teaching it this term, and enrollment_history to see whether I can realistically get a seat.\n\n` +
+      `Warn me about small sample sizes and about any enrollment restriction that would block me.`,
+  },
+  {
+    name: "check-my-schedule",
+    title: "Validate a schedule",
+    description: "Check a set of section codes for conflicts, unit count and enrollment risk.",
+    arguments: [arg("term", 'Which term, e.g. "2026 Fall".', true), arg("sections", 'Comma-separated 5-digit section codes, e.g. "34190,34191,40250".', true)],
+    build: ({ term, sections }) =>
+      `Check this ${term} schedule at UCI: ${sections}\n\n` +
+      `1. check_schedule on those codes for meeting conflicts, final-exam conflicts and total units.\n` +
+      `2. Flag anything that would stop me enrolling: restriction codes, full sections, waitlists.\n` +
+      `3. enrollment_history on each course so I know which one to grab first.\n\n` +
+      `Tell me whether this schedule works, what the total units are, and in what order to enroll.`,
+  },
+  {
+    name: "can-i-take",
+    title: "Check eligibility for a course",
+    description: "Check whether your completed coursework satisfies a course's prerequisites.",
+    arguments: [arg("course", 'The course you want, e.g. "COMPSCI 161".', true), arg("completed", 'What you have taken, with grades if you have them, e.g. "ICS 46:B+, ICS 6B:A, MATH 2B".')],
+    build: ({ course, completed }) =>
+      `Can I take ${course} at UCI?\n\n` +
+      `I have completed: ${completed || "(ask me)"}\n\n` +
+      `Use check_prerequisites and walk the tree branch by branch. Then:\n` +
+      `- If an AP score could satisfy a branch, use ap_credit to confirm the exact exam name and score needed.\n` +
+      `- Use get_course to show me the enrollment restrictions, which the prerequisite tree does not cover ` +
+      `and which the registrar enforces separately.\n` +
+      `- If I am missing something, tell me what to take first and when it is usually offered.`,
+  },
+  {
+    name: "degree-check",
+    title: "Check degree progress",
+    description: "Compare completed coursework against a major's requirements and plan what is left.",
+    arguments: [arg("major", 'Your major, e.g. "Computer Science".', true), arg("completed", "Courses you have already finished.")],
+    build: ({ major, completed }) =>
+      `Check my progress toward a ${major} degree at UCI.\n\n` +
+      `Completed: ${completed || "(ask me)"}\n\n` +
+      `1. list_programs to find the program id, then get_program_requirements for the full tree.\n` +
+      `2. Work through each requirement and mark it satisfied, partially satisfied, or outstanding.\n` +
+      `3. sample_program for the catalogue's recommended sequence, to sanity-check my pacing.\n` +
+      `4. get_program_requirements with kind "ugrad" for the university-wide GE requirements.\n\n` +
+      `Give me a clear list of what is left, and which of it is offered next term.`,
+  },
+];
+
+const promptByName = new Map(PROMPTS.map((p) => [p.name, p]));
+
+/* ---- Resources: reference tables worth reading directly ---------- */
+
+const RESOURCES = [
+  {
+    uri: "anteater://reference/departments",
+    name: "departments",
+    title: "UCI department codes",
+    description: "Every department code used by the schedule of classes, with its full name.",
+    mimeType: "text/plain",
+    read: async () =>
+      table(["Code", "Department"], (await departments()).map((d) => [d.deptCode, d.deptName])),
+  },
+  {
+    uri: "anteater://reference/terms",
+    name: "terms",
+    title: "Available terms",
+    description: "Every term that has schedule-of-classes data, newest first.",
+    mimeType: "text/plain",
+    read: async () => {
+      const terms = await api("/v2/rest/websoc/terms", {}, 3600 * 1000);
+      return table(["Term", "Full name"], terms.map((t) => [t.shortName, t.longName]));
+    },
+  },
+  {
+    uri: "anteater://reference/ge-categories",
+    name: "ge-categories",
+    title: "General Education categories",
+    description: "UCI GE category codes and what each one means.",
+    mimeType: "text/plain",
+    read: async () => table(["Code", "Category"], Object.entries(GE_CATEGORIES)),
+  },
+  {
+    uri: "anteater://reference/restriction-codes",
+    name: "restriction-codes",
+    title: "Enrollment restriction codes",
+    description: "WebSoc restriction codes and their meaning, per the University Registrar.",
+    mimeType: "text/plain",
+    read: async () =>
+      table(["Code", "Meaning"], Object.entries(RESTRICTION_LEGEND)) +
+      "\n\nSource: https://www.reg.uci.edu/enrollment/restrict_codes.html",
+  },
+];
+
+const resourceByUri = new Map(RESOURCES.map((r) => [r.uri, r]));
+
+/* ---- Completions for prompt arguments ---------------------------- */
+
+async function completeArgument(name, value) {
+  const v = String(value || "").toUpperCase();
+  const starts = (list) => list.filter((x) => x.toUpperCase().startsWith(v));
+  const has = (list) => list.filter((x) => x.toUpperCase().includes(v));
+
+  switch (name) {
+    case "term": {
+      const terms = (await api("/v2/rest/websoc/terms", {}, 3600 * 1000)).map((t) => t.shortName);
+      return v ? has(terms) : terms;
+    }
+    case "ge":
+      return v ? starts(Object.keys(GE_CATEGORIES)) : Object.keys(GE_CATEGORIES);
+    case "department": {
+      const codes = (await departments()).map((d) => d.deptCode);
+      return v ? has(codes) : codes;
+    }
+    case "major": {
+      const majors = await api("/v2/rest/programs/majors", {}, 24 * 3600 * 1000);
+      const names = majors.map((m) => m.name.replace(/^Major in /, ""));
+      return v ? has(names) : names;
+    }
+    case "course": {
+      // Only worth a round trip once the department part is unambiguous.
+      const m = String(value || "").match(/^\s*([A-Za-z&\s]{2,})\s*([0-9A-Za-z]*)$/);
+      if (!m) return [];
+      const dept = await resolveDept(m[1]).catch(() => null);
+      if (!dept) return [];
+      const courses = await api("/v2/rest/courses", { department: dept, take: 100 }, 24 * 3600 * 1000).catch(() => []);
+      const labels = courses.map((c) => `${c.department} ${c.courseNumber}`);
+      return m[2] ? labels.filter((x) => x.toUpperCase().replace(/\s+/g, "").includes(`${dept}${m[2]}`.toUpperCase().replace(/\s+/g, ""))) : labels;
+    }
+    default:
+      return [];
+  }
+}
 
 const toolByName = new Map(TOOLS.map((t) => [t.name, t]));
 
@@ -1605,7 +1978,12 @@ async function handleRpc(msg) {
         protocolVersion: SUPPORTED_PROTOCOLS.includes(params?.protocolVersion)
           ? params.protocolVersion
           : PROTOCOL_VERSION,
-        capabilities: { tools: { listChanged: false } },
+        capabilities: {
+          tools: { listChanged: false },
+          prompts: { listChanged: false },
+          resources: { listChanged: false },
+          completions: {},
+        },
         serverInfo: SERVER_INFO,
         instructions: INSTRUCTIONS,
       });
@@ -1620,6 +1998,15 @@ async function handleRpc(msg) {
           title: t.title,
           description: t.description,
           inputSchema: t.inputSchema,
+          // Every tool is a read-only GET against a public API: nothing here
+          // mutates state, and repeating a call is always safe.
+          annotations: {
+            title: t.title,
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: true,
+          },
         })),
       });
 
@@ -1635,10 +2022,57 @@ async function handleRpc(msg) {
       }
     }
 
-    case "resources/list":
-      return reply({ resources: [] });
     case "prompts/list":
-      return reply({ prompts: [] });
+      return reply({
+        prompts: PROMPTS.map((p) => ({
+          name: p.name,
+          title: p.title,
+          description: p.description,
+          arguments: p.arguments,
+        })),
+      });
+
+    case "prompts/get": {
+      const p = promptByName.get(params?.name);
+      if (!p) return fail(-32602, `Unknown prompt "${params?.name}".`);
+      for (const a of p.arguments || []) {
+        if (a.required && !params?.arguments?.[a.name]) {
+          return fail(-32602, `Prompt "${p.name}" requires the "${a.name}" argument.`);
+        }
+      }
+      return reply({
+        description: p.description,
+        messages: [{ role: "user", content: { type: "text", text: p.build(params?.arguments || {}) } }],
+      });
+    }
+
+    case "resources/list":
+      return reply({
+        resources: RESOURCES.map(({ uri, name, title, description, mimeType }) => ({
+          uri, name, title, description, mimeType,
+        })),
+      });
+
+    case "resources/read": {
+      const r = resourceByUri.get(params?.uri);
+      if (!r) return fail(-32602, `Unknown resource "${params?.uri}".`);
+      try {
+        return reply({ contents: [{ uri: r.uri, mimeType: r.mimeType, text: await r.read() }] });
+      } catch (e) {
+        return fail(-32603, e instanceof ApiError ? e.message : `${e.name}: ${e.message}`);
+      }
+    }
+
+    case "completion/complete": {
+      const argName = params?.argument?.name;
+      try {
+        const values = await completeArgument(argName, params?.argument?.value);
+        // The spec caps a completion response at 100 values.
+        return reply({ completion: { values: values.slice(0, 100), total: values.length, hasMore: values.length > 100 } });
+      } catch {
+        return reply({ completion: { values: [], total: 0, hasMore: false } });
+      }
+    }
 
     default:
       if (String(method).startsWith("notifications/")) return null; // no response for notifications

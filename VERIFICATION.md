@@ -49,7 +49,7 @@ set -a; . ./.env; set +a
 node test-offline.mjs
 ```
 
-**Expected:** all 9 items `ok`, final line `9 passed`, exit code 0.
+**Expected:** all 14 items `ok`, final line `14 passed`, exit code 0.
 
 <details><summary>What each test guards against</summary>
 
@@ -63,6 +63,11 @@ node test-offline.mjs
 | unknown tool is a protocol error | |
 | term parsing reaches all six quarters | `"2026 Summer 1"` used to resolve to Spring |
 | restriction legend matches the registrar | `K` was labelled Cross-listed; it means Graduate only |
+| declares every capability it implements | A declared capability that does not answer breaks clients |
+| every tool is annotated read-only | Clients use annotations to decide what needs confirmation |
+| prompts declare arguments and enforce required ones | A missing required argument must be refused, not silently templated |
+| unknown prompt / resource are protocol errors | |
+| completions work offline and respect the 100-value cap | |
 </details>
 
 ---
@@ -74,7 +79,7 @@ set -a; . ./.env; set +a
 node test.mjs
 ```
 
-**Expected:** 29 calls total (`initialize` + `tools/list` + 27 `tools/call`). Exactly
+**Expected:** 33 calls total (`initialize` + `tools/list` + 31 `tools/call`). Exactly
 **three** `[isError]` results, and they are the three deliberate error cases at the end:
 
 ```
@@ -185,7 +190,20 @@ ask get_program_requirements '{"kind":"ugrad","block":"GE"}' | head -3
 ✅ Prints `UCI undergraduate requirements` and a requirement tree
 ❌ An error — the endpoint has a required `id` parameter that used to go unsent
 
-### 3.9 Term ordering (Fall is the *latest* term of its year)
+### 3.9 The three newest tools return real data
+
+```bash
+ask get_syllabi '{"courseId":"CS 161"}' | head -4
+ask ap_credit '{"exam":"Calculus BC"}' | head -6
+ask sample_program '{"program":"Computer Science, B.S."}' | head -6
+```
+✅ `get_syllabi` lists past terms with Canvas links; `ap_credit` shows score rows with
+`Courses cleared` such as `(MATH 2A and MATH 2B or MATH 5A and MATH 5B)`, plus the
+`apScores key for check_prerequisites` line; `sample_program` prints a Freshman/Sophomore/
+Junior/Senior sequence
+❌ Empty output or an error
+
+### 3.10 Term ordering (Fall is the *latest* term of its year)
 
 ```bash
 ask enrollment_history '{"courseId":"COMPSCI 161"}' | head -6
@@ -261,7 +279,8 @@ Put the contents of `claude_desktop_config.example.json` into
 `~/Library/Application Support/Claude/claude_desktop_config.json`, replacing the path
 with an absolute one. Restart.
 
-✅ **13** anteater tools appear in the tool list
+✅ **16** anteater tools appear in the tool list
+✅ The **6 prompts** appear as slash commands (`plan-quarter`, `find-easy-ge`, …)
 ✅ Asking *"which GE-2 courses for Fall 2026 still have seats and end before 5pm"*
 returns a table with 5-digit section codes
 ✅ The response carries the Anteater API attribution
@@ -283,7 +302,7 @@ real data
 Environment:  Node <version> / <OS> / API key: yes|no
 Section 1 offline:      9 passed PASS / FAIL <which items + actual output>
 Section 2 integration:  only 3 expected isError  PASS / FAIL <actual error text>
-Section 3 regressions:  3.1 PASS 3.2 PASS ... <paste full output for failures>
+Section 3 regressions:  3.1 PASS 3.2 PASS ... 3.10 <paste full output for failures>
 Section 4 security:     4.1 4.2 4.3 4.4 4.5
 Section 5 integration:  5.1 5.2 / not tested
 ```
