@@ -78,30 +78,20 @@ if (serverJson.version !== packageJson.version) {
   throw new Error(`Version mismatch: package.json=${packageJson.version}, server.json=${serverJson.version}`);
 }
 const ociPackage = (serverJson.packages || []).find((x) => x.registryType === "oci");
-if (ociPackage?.version !== packageJson.version) {
-  throw new Error(`server.json oci package version is ${ociPackage?.version}, expected ${packageJson.version}`);
+if (!ociPackage) throw new Error("server.json declares no oci package");
+// The registry rejects a version field on an OCI package; the tag carries it.
+if (ociPackage.version !== undefined) {
+  throw new Error("server.json oci package must not have a version field — put the tag in identifier");
 }
-// Constraints the registry enforces server-side, from
-// https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json.
-// A release that violates one fails only after the image and GitHub release are
-// already published, so check them here instead.
-const REGISTRY_LIMITS = [
-  { field: "description", max: 100, min: 1 },
-  { field: "title", max: 100, min: 1 },
-  { field: "name", max: 200, min: 3, pattern: /^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/ },
-  { field: "version", max: 255, min: 1 },
-];
-for (const { field, max, min, pattern } of REGISTRY_LIMITS) {
-  const value = serverJson[field];
-  if (typeof value !== "string" || value.length < min) {
-    throw new Error(`server.json ${field} is missing or shorter than ${min} characters`);
-  }
-  if (value.length > max) {
-    throw new Error(`server.json ${field} is ${value.length} characters; the registry allows ${max}`);
-  }
-  if (pattern && !pattern.test(value)) {
-    throw new Error(`server.json ${field} does not match the registry's required format: ${value}`);
-  }
+// Our own invariants only. The registry's rules are checked by its own validator,
+// run in the release workflow — transcribing them here gave false confidence once
+// already: a hand-written length check passed while the real validator rejected the
+// package shape.
+const ociPackageTag = ociPackage?.identifier?.split(":")[1];
+if (ociPackageTag !== `v${packageJson.version}`) {
+  throw new Error(
+    `server.json oci identifier is tagged ${ociPackageTag || "(untagged)"}, expected v${packageJson.version}`,
+  );
 }
 
 // Publishing this file is public. A declared secret must never carry a value.

@@ -29,6 +29,17 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: npm run check:version
+      - name: Validate the registry entry before anything is published
+        # The registry's own validator, not a transcription of its rules. Runs in the
+        # first job so a rejected entry costs nothing: 0.0.7 and 0.0.8 both failed here
+        # only after the image and GitHub release were already live.
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+          ./mcp-publisher validate
+
       - name: Re-run release gates
         run: |
           npm ci
