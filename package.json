@@ -35,12 +35,20 @@
     "NOTICE"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "scripts": {
     "start": "node anteater-mcp.mjs",
     "start:http": "node anteater-mcp.mjs --http",
     "tools": "node anteater-mcp.mjs --list-tools",
-    "test": "node test.mjs"
+    "build:sea": "node scripts/build-sea.mjs",
+    "check:version": "node scripts/check-version.mjs",
+    "test": "npm run test:offline",
+    "test:offline": "node test-offline.mjs",
+    "test:live": "node test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "postject": "1.0.0-alpha.6"
   }
 }

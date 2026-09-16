@@ -4,7 +4,7 @@
  * (https://github.com/icssc/anteater-api), built for course discovery and
  * registration planning.
  *
- * Zero dependencies. Requires Node >= 18.
+ * Zero runtime dependencies. Requires Node >= 22.
  *
  *   stdio (Claude Desktop / Claude Code):  node anteater-mcp.mjs
  *   streamable HTTP (ChatGPT / remote):    node anteater-mcp.mjs --http [--port 8787]
@@ -1007,8 +1007,11 @@ tool({
   name: "course_grades",
   title: "Grade distribution for a course",
   description:
-    "Historical grade distributions and average GPA for a course, broken down by instructor (default) or by term. " +
-    "Use this to answer 'which professor should I take?' or 'how hard is this class?'. " +
+    "Historical grade distributions and average GPA for ONE COURSE, broken down by instructor " +
+    "(default) or by term. Use this to answer 'which professor should I take for this course?' or " +
+    "'how hard is this class?'. " +
+    "Start from a course; to start from a person instead and see how they grade across everything " +
+    "they teach, use instructor_info. " +
     "Data is from UCI's public records; recent quarters may be missing.",
   inputSchema: {
     type: "object",
@@ -1117,8 +1120,10 @@ tool({
   name: "instructor_info",
   title: "Look up an instructor",
   description:
-    "Find a UCI instructor and see their title, department, the courses they have taught, and their average GPA " +
-    "given across all courses. Use to evaluate a professor before enrolling.",
+    "Find ONE INSTRUCTOR and see their title, department, every course they have taught, and the " +
+    "grades they give across all of them. Use to evaluate a professor in general, or to resolve a " +
+    "name to the exact form the grade endpoints expect. " +
+    "Start from a person; to compare all the instructors of a single course instead, use course_grades.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1850,8 +1855,11 @@ tool({
   name: "get_program_requirements",
   title: "Get degree requirements",
   description:
-    "The full requirement tree for a major, minor or specialization, or the university's general undergraduate " +
-    "requirements (GE categories, unit minimums). Use for degree planning — 'what do I still need?'.",
+    "The BINDING requirement tree for a major, minor or specialization, or the university's " +
+    "general undergraduate requirements (GE categories, unit minimums). This is the authoritative " +
+    "list of what must be completed to graduate — use it for 'what do I still need?'. " +
+    "For the catalogue's suggested ordering of those requirements across four years, use " +
+    "sample_program.",
   inputSchema: {
     type: "object",
     properties: {
@@ -2045,9 +2053,11 @@ tool({
   name: "sample_program",
   title: "Sample four-year plan for a major",
   description:
-    "The catalogue's recommended quarter-by-quarter course sequence for a major. " +
-    "Use to answer 'what should I take first year?' or to sanity-check whether a student is on " +
-    "track. Call with no argument to list the majors that have a published plan.",
+    "The catalogue's SUGGESTED quarter-by-quarter sequence for a major — a pacing example, not a " +
+    "rule. Use to answer 'what should I take first year?' or to sanity-check whether a student is " +
+    "on track. Call with no argument to list the majors that have a published plan. " +
+    "For the BINDING list of what must be completed to graduate, use get_program_requirements; " +
+    "this tool cannot tell you whether a requirement is satisfied.",
   inputSchema: {
     type: "object",
     properties: {
@@ -2727,10 +2737,10 @@ function runHttp(port, host) {
           `endpoint is unauthenticated. Set ANTEATER_MCP_TOKEN before exposing it.\n`,
       );
     }
-    if (host !== "127.0.0.1" && host !== "localhost") {
+    if (!MCP_TOKEN && host !== "127.0.0.1" && host !== "localhost") {
       process.stderr.write(
         `anteater-mcp WARNING: bound to ${host}, so anyone who can reach this host can call ` +
-          `every tool — there is no authentication. Prefer the default 127.0.0.1 plus a tunnel.\n`,
+          `every tool — there is no authentication. Set ANTEATER_MCP_TOKEN or bind to loopback.\n`,
       );
     }
   });
@@ -2739,7 +2749,22 @@ function runHttp(port, host) {
 /* ---- entry point ------------------------------------------------- */
 
 const argv = process.argv.slice(2);
-if (argv.includes("--list-tools")) {
+if (argv.includes("--version") || argv.includes("-v")) {
+  console.log(`${SERVER_INFO.name} ${SERVER_INFO.version}`);
+} else if (argv.includes("--help") || argv.includes("-h")) {
+  console.log(`Usage: anteater-mcp [options]
+
+Transports:
+  (no option)             MCP over stdio
+  --http                  MCP over streamable HTTP
+
+Options:
+  --host <address>        HTTP bind address (default: HOST or 127.0.0.1)
+  --port <number>         HTTP port (default: PORT or 8787)
+  --list-tools            List the available MCP tools
+  -v, --version           Print the version
+  -h, --help              Show this help`);
+} else if (argv.includes("--list-tools")) {
   console.log(TOOLS.map((t) => `${t.name.padEnd(26)} ${t.title}`).join("\n"));
 } else if (argv.includes("--http")) {
   const pi = argv.indexOf("--port");

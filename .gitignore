@@ -1,6 +1,7 @@
-# This project is intentionally dependency-free; node_modules should never appear.
+# Runtime stays dependency-free. Build-only packages are locked for reproducible releases.
 node_modules/
-package-lock.json
+build/
+dist/
 
 # Secrets — ANTEATER_API_KEY belongs in the environment, never in the tree.
 .env
