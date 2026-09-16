@@ -629,6 +629,7 @@ tool({
     let courses;
 
     let usedFallback = false;
+    let usedFallbackReason = "";
     if (a.query) {
       try {
         const res = await api("/v2/rest/search", {
@@ -645,7 +646,17 @@ tool({
       } catch (e) {
         // The fuzzy-search endpoint is key-gated. Degrade to substring matching
         // over titles, then descriptions, which needs no key.
-        if (!/API key/i.test(e.message)) throw e;
+        // Two distinct refusals: no key at all, or a valid key without permission for
+        // this endpoint. Telling someone who already has a working key to "set a key"
+        // is a dead end, so distinguish them.
+        const noKey = /key is required/i.test(e.message);
+        const notPermitted = /not permitted/i.test(e.message);
+        if (!noKey && !notPermitted) throw e;
+        usedFallbackReason = notPermitted
+          ? `the fuzzy-search endpoint rejected this API key as "not permitted to access this ` +
+            `resource" — it needs elevated permission that ordinary keys do not carry`
+          : `the fuzzy-search endpoint requires an API key (set ANTEATER_API_KEY — see ` +
+            `https://docs.icssc.club/docs/developer/anteaterapi/keys-limits)`;
         usedFallback = true;
         const base = { department, geCategory: a.geCategory, courseLevel: a.courseLevel, minUnits: a.minUnits, maxUnits: a.maxUnits, take: limit };
         const seen = new Set();
@@ -693,9 +704,9 @@ tool({
       table(["Course", "Title", "Units", "GE", "Prereq"], rows) +
       `\n\n${courses.length} result(s). Use get_course for full details (description, prerequisites, restrictions).` +
       (usedFallback
-        ? `\nNote: fuzzy search needs an API key, so this used plain substring matching on title then description. ` +
-          `Set ANTEATER_API_KEY for smarter ranking — see ` +
-          `https://docs.icssc.club/docs/developer/anteaterapi/keys-limits.`
+        ? `\nNote: this used plain substring matching on title, then description, because ` +
+          `${usedFallbackReason}. These are exact substring hits, not relevance-ranked — ` +
+          `a distinctive single word works better than a phrase.`
         : "") +
       `\n${ATTRIBUTION}`
     );

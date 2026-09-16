@@ -231,9 +231,15 @@ Reference tables your client can read directly, without spending a tool call:
 
 ### API key
 
-Optional, but recommended. Anonymous calls draw on a shared hourly quota that is easy to
-exhaust — and the fuzzy-search endpoint `/v2/rest/search` **requires a key**, so without
-one `search_courses` degrades to substring matching on title and description.
+Optional, but recommended: anonymous calls draw on a shared hourly quota that is easy to
+exhaust, and a key gives you your own.
+
+It will **not** unlock fuzzy search. `/v2/rest/search` rejects ordinary keys with
+`not permitted to access this resource` — it needs elevated permission ICSSC grants
+separately. Without it `search_courses` falls back to substring matching on title, then
+description, and says so in its output. The structured filters (`department`,
+`geCategory`, `courseLevel`, units) are unaffected and are usually the better tool
+anyway.
 
 1. Go to [dashboard.anteaterapi.com/create](https://dashboard.anteaterapi.com/create)
 2. Choose type **`secret`** — `publishable` keys are verified against the `Origin`
@@ -287,7 +293,7 @@ node anteater-mcp.mjs --list-tools       # list every tool
 |---|---|
 | Tools don't appear in Claude Desktop | The path must be **absolute**, and you must fully quit and reopen the app. Check the config parses: `node -e "require('./claude_desktop_config.json')"`. |
 | `Anteater API rate limit hit` | The anonymous quota is shared and replenishes hourly. Set `ANTEATER_API_KEY`. |
-| `search_courses` returns odd results | Fuzzy search needs a key; without one it falls back to substring matching. The output says so when it does. |
+| `search_courses` returns odd results | Fuzzy search needs a privileged key that ordinary keys are not granted; it falls back to substring matching and says so. Use the structured filters instead. |
 | `Too broad` from `find_sections` | A whole term is tens of thousands of sections. Add `department`, `courseNumber`, `ge`, `instructor` or `sectionCodes`. |
 | `"2026 summer" is ambiguous` | UCI has three summer terms. Use `Summer1`, `Summer2` or `Summer10wk`. |
 | `Unknown department "..."` | Use `list_departments`, or read `anteater://reference/departments`. |
@@ -395,7 +401,10 @@ Undocumented upstream; all handled here, and listed in case they save you the de
 - **Course comments are raw HTML fragments**, complete with `<p>` and `&quot;`.
 - **`startTime` / `endTime` mean "starts at or after" and "ends at or before"**, not
   interval overlap.
-- **`/v2/rest/search` requires an API key** even though everything else is anonymous.
+- **`/v2/rest/search` needs a *privileged* API key.** An ordinary key is refused with
+  `not permitted to access this resource`, which is a different error from the
+  `key is required` you get with no key at all — worth distinguishing, since telling
+  someone who already has a key to get a key is a dead end.
 - **`/v2/rest/websoc/syllabi` takes `courseId`**, not `department` + `courseNumber`.
 
 ---
