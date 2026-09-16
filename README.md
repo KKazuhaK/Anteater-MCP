@@ -4,8 +4,9 @@ An MCP server that lets Claude and ChatGPT help you pick classes at UC Irvine.
 
 It wraps [Anteater API](https://icssc.link/about-anteaterapi) — UCI's course catalogue,
 the live schedule of classes (WebSoc), historical grade distributions, enrollment
-history, prerequisite trees, AP credit and degree requirements — and exposes them as
-**19 tools, 6 guided prompts and 4 reference resources**, shaped around the questions
+history, prerequisite trees, AP credit, degree requirements and supplementary RMP
+ratings — and exposes them as
+**20 tools, 6 guided prompts and 4 reference resources**, shaped around the questions
 students actually ask.
 
 **Zero runtime dependencies.** Run the source with Node 24 LTS, or download a standalone
@@ -111,7 +112,7 @@ With an API key:
 }
 ```
 
-Restart Claude Desktop completely (quit, don't just close the window). You should see 19
+Restart Claude Desktop completely (quit, don't just close the window). You should see 20
 anteater tools, and the 6 prompts appear as slash commands.
 
 `claude_desktop_config.example.json` in this repo is the same thing, ready to copy.
@@ -167,7 +168,7 @@ node anteater-mcp.mjs --http --port 8787   # binds 127.0.0.1 only — do not add
 ngrok http 8787      # or: cloudflared tunnel --url http://localhost:8787
 ```
 
-Add the URL under **Settings → Connectors → Advanced → Developer mode**. All 19 tools
+Add the URL under **Settings → Connectors → Advanced → Developer mode**. All 20 tools
 work, including batch course lookup, deterministic degree-progress checks, prerequisite
 checking and conflict detection.
 
@@ -202,7 +203,7 @@ the Claude one, only the connector UI differs.
 | Server needed | No | Yes, public HTTPS |
 | Auth options | None · API Key (Basic/Bearer/**custom header**) · OAuth | Access token / API key with a **Bearer, Basic or custom header** scheme · OAuth · none. Claude's connector dialog takes request headers too, so `?token=` is only a fallback |
 | Can carry your Anteater key | Yes, API Key → Bearer | Yes, server-side via `ANTEATER_API_KEY` |
-| What the model gets | 12 raw API operations, JSON | All 19 tools, formatted, plus 6 prompts and 4 resources |
+| What the model gets | 12 raw API operations, JSON | All 20 tools, formatted, plus 6 prompts and 4 resources |
 | Prerequisite / conflict checking | No — the model must reason it out | Yes |
 | Works on mobile | Yes | **No** — MCP plugins are web-only |
 
@@ -255,7 +256,7 @@ the server negotiates down rather than echoing whatever it is sent.
 
 ## What you get
 
-### Tools (19)
+### Tools (20)
 
 **Finding classes**
 
@@ -275,6 +276,7 @@ the server negotiates down rather than echoing whatever it is sent.
 |---|---|
 | `get_course_grades` | Grade distribution by instructor or by term — *"which professor should I take?"* |
 | `get_instructor` | A professor's courses and the grades they actually give |
+| `get_rmp_ratings` | Rate My Professors average, review count and profile link for instructors teaching in a term |
 | `get_enrollment_history` | Day-by-day fill curves — *"will I get in?"* |
 | `get_syllabi` | Links to syllabi from past offerings — real workload and grading breakdown |
 | `get_course_materials` | Required and recommended textbooks, with ISBNs and UCI Library links |
@@ -300,7 +302,7 @@ Five of these compute things the upstream API does not provide: prerequisite-tre
 evaluation, schedule conflict detection, the join between the live schedule and
 historical grade data, AP-grant rendering, and deterministic degree-progress evaluation.
 
-All 19 are annotated `readOnlyHint: true` — nothing here mutates anything.
+All 20 are annotated `readOnlyHint: true` — nothing here mutates anything.
 
 ### Prompts (6)
 
@@ -362,6 +364,7 @@ set -a; . ./.env; set +a # load it without echoing the value
 |---|---|
 | `ANTEATER_API_KEY` | Your secret key. See above. |
 | `ANTEATER_API_BASE` | Defaults to `https://anteaterapi.com`. Point at a self-hosted instance. |
+| `ZOTCOURSE_API_BASE` | Independent fallback for live WebSoc schedule queries. Defaults to `https://zotcourse.appspot.com`; set to `off` to disable. Only `search_sections`, `check_schedule` and `recommend_courses` use it, and fallback results are labelled as potentially cached. |
 | `ANTEATER_MCP_TOKEN` | HTTP mode only, and **required before you expose the server**. Clients send `Authorization: Bearer <token>`, which is preferred, or use `https://host/mcp?token=<token>` where the client accepts only a URL. Any token in a URL can land in browser history, connector settings, and proxy logs. `/health` stays open. Unset means no authentication, which is only safe on loopback. |
 | `ANTEATER_ALLOWED_ORIGINS` | HTTP mode only. Comma-separated extra origins to allow. |
 | `ANTEATER_TRUSTED_PROXIES` | HTTP mode only. Which direct peers may set `X-Forwarded-*`. Accepts CIDRs, bare addresses, and the shorthands `private` and `loopback`. **Unset means the headers are ignored**, because they are client-supplied and would otherwise let anyone forge their address in your log. Behind a reverse proxy set this, or every request looks like it came from the proxy. `private` covers the Docker bridge. |
@@ -411,6 +414,7 @@ node anteater-mcp.mjs --list-tools       # list every tool
 | `Unknown department "..."` | Use `list_departments`, or read `anteater://reference/departments`. |
 | A course has no grade data | Recent quarters lag, and P/NP-only courses have none. |
 | Seats look stale | Live figures are cached for 5 minutes; the catalogue for 24 hours. |
+| Schedule fallback appears | Anteater API was unavailable, so the schedule came from Zotcourse's WebSoc-backed endpoint. Verify seats and section pairing in WebReg. Set `ZOTCOURSE_API_BASE=off` if you do not want this network fallback. |
 
 ---
 

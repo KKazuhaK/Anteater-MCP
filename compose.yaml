@@ -22,6 +22,8 @@ services:
       # container behind a reverse proxy logs the bridge gateway and reports http://
       # in the generated OpenAPI document. "private" covers the Docker bridge.
       ANTEATER_TRUSTED_PROXIES: "${ANTEATER_TRUSTED_PROXIES:-private}"
+      # Independent fallback for live schedule queries. Set to "off" to disable it.
+      ZOTCOURSE_API_BASE: "${ZOTCOURSE_API_BASE:-https://zotcourse.appspot.com}"
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m

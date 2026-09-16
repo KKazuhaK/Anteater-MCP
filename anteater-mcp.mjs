@@ -35,13 +35,18 @@ import process from "node:process";
 
 const BASE = process.env.ANTEATER_API_BASE || "https://anteaterapi.com";
 const API_KEY = process.env.ANTEATER_API_KEY || "";
+// Zotcourse is an independent WebSoc-backed source. It is used only when the
+// primary Anteater web-schedule request fails; set this to "off" to disable it.
+const ZOTCOURSE_BASE = process.env.ZOTCOURSE_API_BASE === "off"
+  ? ""
+  : (process.env.ZOTCOURSE_API_BASE || "https://zotcourse.appspot.com");
 // Shared secret for the HTTP transport. Unset means no auth, which is only safe on
 // loopback. Anything reachable from the internet must set it.
 const MCP_TOKEN = process.env.ANTEATER_MCP_TOKEN || "";
 const SOURCE_URL = "https://github.com/KKazuhaK/Anteater-MCP";
 
 // check-version.mjs parses this exact line and requires it to match package.json.
-const SERVER_INFO = { name: "anteater-mcp", version: "0.0.5" };
+const SERVER_INFO = { name: "anteater-mcp", version: "0.0.6" };
 const UA = `${SERVER_INFO.name}/${SERVER_INFO.version} (+${SOURCE_URL})`;
 const PROTOCOL_VERSION = "2025-06-18";
 const SUPPORTED_PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -116,6 +121,264 @@ async function api(path, params = {}, ttl = 10 * 60 * 1000) {
   const data = body.data;
   cacheSet(url, data, ttl);
   return data;
+}
+
+/* ------------------------------------------------------------------ *
+ * Independent WebSoc fallback
+ *
+ * Zotcourse is a Flask application rather than an Anteater-compatible REST
+ * service. Its /search endpoint does, however, return the live WebSoc listing
+ * in a stable JSON shape. Keep this adapter deliberately narrow: it normalizes
+ * only schedule data, and never silently substitutes it for catalogue,
+ * grades, degree or other Anteater resources.
+ * ------------------------------------------------------------------ */
+
+const ZOTCOURSE_TERM_CODES = {
+  Fall: "92",
+  Winter: "03",
+  Spring: "14",
+  Summer1: "25",
+  Summer10wk: "39",
+  Summer2: "76",
+};
+
+const ZOTCOURSE_DIVISIONS = {
+  LowerDiv: "0xx",
+  UpperDiv: "1xx",
+  Graduate: "2xx",
+  ANY: "ANY",
+};
+
+const ZOTCOURSE_SOURCE_URL = "https://github.com/jogplus/zotcourse";
+const ZOTCOURSE_ATTRIBUTION =
+  `Schedule fallback: Zotcourse (${ZOTCOURSE_SOURCE_URL}), which queries UCI WebSoc and may serve cached data. ` +
+  `Verify live seats and enrollment status in WebReg before registering.`;
+const RMP_ATTRIBUTION =
+  `RMP data is supplied through Zotcourse (${ZOTCOURSE_SOURCE_URL}) and is not an official UCI rating. ` +
+  `Use the linked RMP page for the latest reviews; treat small review counts cautiously.`;
+
+function sourceNote(source) {
+  return source === "Zotcourse"
+    ? "\n\n⚠ Anteater API was unavailable for the schedule request; verify this fallback result in WebReg."
+    : "";
+}
+
+function sourceAttribution(source) {
+  return source === "Zotcourse" ? ZOTCOURSE_ATTRIBUTION : ATTRIBUTION;
+}
+
+function rmpProfileUrl(rating, instructor) {
+  if (rating?.id) {
+    return `https://www.ratemyprofessors.com/ShowRatings.jsp?tid=${encodeURIComponent(rating.id)}`;
+  }
+  const lastName = String(instructor || "").split(",")[0].trim();
+  return `https://www.ratemyprofessors.com/search.jsp?queryoption=HEADER&queryBy=teacherName&schoolName=University+of+California+Irvine&schoolID=1074&query=${encodeURIComponent(lastName)}`;
+}
+
+function parseClock(value) {
+  const m = String(value || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  return m ? { hour: Number(m[1]), minute: Number(m[2]) } : null;
+}
+
+function zotcourseDays(days) {
+  const names = ["Su", "M", "Tu", "W", "Th", "F", "S"];
+  return (Array.isArray(days) ? days : []).map((d) => names[Number(d)]).filter(Boolean).join("");
+}
+
+function zotcourseMeeting(raw) {
+  const startTime = parseClock(raw?.start);
+  const endTime = parseClock(raw?.end);
+  const tba = !startTime || !endTime || String(raw?.f_time || "").toUpperCase() === "TBA";
+  const room = [raw?.bldg, raw?.rm].filter(Boolean).join(" ");
+  return {
+    timeIsTBA: tba,
+    bldg: room ? [room] : [],
+    days: zotcourseDays(raw?.days),
+    ...(tba ? {} : { startTime, endTime }),
+  };
+}
+
+function zotcourseFinal(raw) {
+  if (!raw) return { examStatus: "NO_FINAL" };
+  const startTime = parseClock(raw.start);
+  const endTime = parseClock(raw.end);
+  if (!startTime || !endTime || String(raw.f_time || "").toUpperCase() === "TBA") {
+    return { examStatus: "TBA" };
+  }
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return {
+    examStatus: "SCHEDULED_FINAL",
+    dayOfWeek: days[Number(raw.day)] || "",
+    month: Number(raw.month),
+    day: Number(raw.date),
+    startTime,
+    endTime,
+    bldg: [],
+  };
+}
+
+/** Uppercase so ids round-trip: Zotcourse says "CompSci" where WebSoc says "COMPSCI". */
+const normalizeDeptCode = (code) => String(code || "").trim().toUpperCase();
+
+function zotcourseDeptCode(department, course, requestedDepartment) {
+  if (requestedDepartment && requestedDepartment !== " ALL") return requestedDepartment;
+  try {
+    const url = new URL(course?.prereq);
+    const code = url.searchParams.get("dept");
+    if (code) return normalizeDeptCode(code);
+  } catch {
+    // Some old catalogue entries have no prerequisite URL. The display code
+    // below is still more useful than dropping the result entirely.
+  }
+  // Mixing "COMPSCI 161" and "CompSci 199" in one table looks unreliable, and a course
+  // id copied out of it would not match when fed back into the other tools.
+  return normalizeDeptCode(department?.dept || department?.dept_n) || "UNKNOWN";
+}
+
+function normalizeZotcourse(payload, requestedDepartment) {
+  const departments = [];
+  for (const department of payload?.data || []) {
+    for (const course of department.courses || []) {
+      const deptCode = zotcourseDeptCode(department, course, requestedDepartment);
+      departments.push({
+        deptCode,
+        deptName: department.dept_n || department.dept || deptCode,
+        courses: [{
+          courseId: `${deptCode}${course.num}`.replace(/\s+/g, ""),
+          courseNumber: course.num,
+          courseTitle: course.title,
+          courseComment: course.comm || "",
+          prerequisiteLink: course.prereq || "",
+          sections: (course.sections || []).map((section) => ({
+            units: section.unit,
+            status: section.stat || "",
+            meetings: (section.mtng || []).map(zotcourseMeeting),
+            finalExam: zotcourseFinal(section.final),
+            sectionNum: section.s_num,
+            instructors: [...new Set((section.instr || []).map((i) => i?.name).filter(Boolean))],
+            maxCapacity: section.m_enrll,
+            sectionCode: section.code,
+            sectionType: section.c_type,
+            numRequested: "",
+            restrictions: section.rstrcn || "",
+            numOnWaitlist: section.wtlt || "",
+            numWaitlistCap: section.wt_cp || "",
+            numNewOnlyReserved: section.nor || "",
+            numCurrentlyEnrolled: { totalEnrolled: section.enrll || "", sectionEnrolled: "" },
+            isCancelled: String(section.stat || "").toUpperCase() === "CANCELLED",
+            sectionComment: "",
+            updatedAt: "",
+            webURL: "",
+            rmpRatings: (section.instr || [])
+              .filter((instructor) => instructor?.rating?.avg !== undefined || instructor?.rating?.id)
+              .map((instructor) => ({
+                instructor: instructor.name,
+                average: Number(instructor.rating.avg),
+                reviews: Number(instructor.rating.cnt) || 0,
+                url: rmpProfileUrl(instructor.rating, instructor.name),
+              })),
+          })),
+        }],
+      });
+    }
+  }
+  return {
+    schools: [{
+      schoolName: "University of California, Irvine",
+      departments,
+    }],
+  };
+}
+
+function zotcourseTime(value) {
+  const normalized = normalizeTime(value);
+  if (!normalized) return undefined;
+  const [hour, minute] = normalized.split(":").map(Number);
+  const suffix = hour >= 12 ? "pm" : "am";
+  const h = hour % 12 || 12;
+  return `${h}:${String(minute).padStart(2, "0")}${suffix}`;
+}
+
+function zotcourseParams(params) {
+  const termCode = ZOTCOURSE_TERM_CODES[params.quarter];
+  if (!termCode) throw new ApiError(`Zotcourse does not publish ${params.quarter} terms.`);
+  const days = params.days ? parseDays(String(params.days).replace(/[^A-Za-z]/g, "")).join("") : undefined;
+  return {
+    YearTerm: `${params.year}-${termCode}`,
+    Breadth: params.ge || "ANY",
+    Dept: params.department || " ALL",
+    CourseCodes: params.sectionCodes,
+    CourseNum: params.courseNumber,
+    Division: ZOTCOURSE_DIVISIONS[params.division] || params.division || "ANY",
+    InstrName: params.instructorName,
+    CourseTitle: params.courseTitle,
+    ClassType: !params.sectionType || params.sectionType === "ANY" ? "ALL" : String(params.sectionType).toUpperCase(),
+    Units: params.units,
+    Days: days,
+    StartTime: zotcourseTime(params.startTime),
+    EndTime: zotcourseTime(params.endTime),
+    FullCourses: params.fullCourses || "ANY",
+    Submit: "XML",
+  };
+}
+
+function defaultRmpTerm() {
+  const now = new Date();
+  const year = String(now.getFullYear());
+  const month = now.getMonth();
+  if (month <= 2) return { year, quarter: "Winter" };
+  if (month <= 5) return { year, quarter: "Spring" };
+  if (month === 6) return { year, quarter: "Summer1" };
+  if (month === 7) return { year, quarter: "Summer2" };
+  return { year, quarter: "Fall" };
+}
+
+async function zotcourseSearch(params, ttl = 5 * 60 * 1000) {
+  if (!ZOTCOURSE_BASE) throw new ApiError("Zotcourse fallback is disabled (ZOTCOURSE_API_BASE=off).");
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(zotcourseParams(params))) {
+    if (value !== undefined && value !== null && value !== "") qs.set(key, String(value));
+  }
+  const url = `${ZOTCOURSE_BASE.replace(/\/$/, "")}/search?${qs}`;
+  const cacheKey = `zotcourse:${url}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== undefined) return cached;
+
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: { "User-Agent": UA, Accept: "application/json" },
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch (e) {
+    throw new ApiError(`Could not reach Zotcourse (${e.message}).`);
+  }
+  const text = await res.text();
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw new ApiError(`Zotcourse returned non-JSON (HTTP ${res.status}): ${text.slice(0, 160)}`);
+  }
+  if (!res.ok || !Array.isArray(body?.data)) {
+    throw new ApiError(`Zotcourse error: ${body?.error || `HTTP ${res.status}`}`);
+  }
+  const data = normalizeZotcourse(body, params.department);
+  cacheSet(cacheKey, data, ttl);
+  return data;
+}
+
+async function websoc(params, ttl = 5 * 60 * 1000) {
+  try {
+    return { data: await api("/v2/rest/websoc", params, ttl), source: "Anteater API" };
+  } catch (primary) {
+    if (!ZOTCOURSE_BASE) throw primary;
+    try {
+      return { data: await zotcourseSearch(params, ttl), source: "Zotcourse" };
+    } catch (backup) {
+      throw new ApiError(`${primary.message} Backup source Zotcourse also failed: ${backup.message}`);
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -232,6 +495,38 @@ async function resolveDept(input) {
     );
   }
   throw new ApiError(`Unknown department "${input}". Call list_departments to see valid codes.`);
+}
+
+// A schedule fallback must still work when the primary department directory is
+// the thing that is down. Keep this intentionally small and conservative: an
+// unknown department name should still produce the original helpful error.
+const DEPT_NAME_FALLBACKS = {
+  "COMPUTER SCIENCE": "COMPSCI",
+  "INFORMATION AND COMPUTER SCIENCE": "I&C SCI",
+  "INFORMATICS": "IN4MATX",
+  "MATHEMATICS": "MATH",
+  "PHYSICS": "PHYSICS",
+  "CHEMISTRY": "CHEM",
+  "BIOLOGICAL SCIENCES": "BIO SCI",
+  "PSYCHOLOGY": "PSYCH",
+  "WRITING": "WRITING",
+};
+
+function fallbackDepartment(input) {
+  const raw = String(input || "").trim();
+  const upper = raw.toUpperCase();
+  const squash = upper.replace(/[^A-Z0-9&]/g, "");
+  return DEPT_ALIASES[squash] || DEPT_NAME_FALLBACKS[upper] || (/^[A-Z0-9&]+(?:\s+[A-Z0-9&]+)*$/.test(upper) ? upper : null);
+}
+
+async function resolveScheduleDept(input) {
+  try {
+    return await resolveDept(input);
+  } catch (primary) {
+    const fallback = fallbackDepartment(input);
+    if (fallback) return fallback;
+    throw primary;
+  }
 }
 
 /** "cs 161" / "COMPSCI161" -> "COMPSCI161" (the API's course id form). */
@@ -929,7 +1224,7 @@ tool({
   },
   async run(a) {
     const { year, quarter } = parseTerm(a.term);
-    const department = a.department ? await resolveDept(a.department) : undefined;
+    const department = a.department ? await resolveScheduleDept(a.department) : undefined;
 
     if (!department && !a.courseNumber && !a.ge && !a.instructor && !a.sectionCodes && !a.courseTitle && !a.building) {
       throw new ApiError(
@@ -945,8 +1240,7 @@ tool({
       : availability === "FullOnly" ? "FullOnly"
       : "ANY";
 
-    const data = await api(
-      "/v2/rest/websoc",
+    const { data, source } = await websoc(
       {
         year, quarter, department,
         courseNumber: a.courseNumber,
@@ -1083,7 +1377,8 @@ tool({
           `will tell you if a component is missing entirely.`,
       );
     }
-    out.push(ATTRIBUTION);
+    out.push(sourceAttribution(source));
+    out.push(sourceNote(source));
     return out.join("\n");
   },
 });
@@ -1267,7 +1562,104 @@ tool({
   },
 });
 
-/* -- 9. get_enrollment_history ----------------------------------------- */
+/* -- 9. get_rmp_ratings -------------------------------------------- */
+
+tool({
+  name: "get_rmp_ratings",
+  title: "Find Rate My Professors ratings",
+  description:
+    "Look up Rate My Professors ratings for an instructor teaching at UCI. " +
+    "Returns the average rating out of 5, review count, current-term course matches and a direct RMP link. " +
+    "This is supplementary student-review data, not an official UCI evaluation or a substitute for grade distributions. " +
+    "If no term is supplied, the current academic term is used.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      instructor: str('Instructor name or surname, e.g. "Shindler".'),
+      term: str('Optional term, e.g. "2026 Fall". Defaults to the current academic term.'),
+      department: str('Optional department code, e.g. "COMPSCI".'),
+      courseNumber: str('Optional course number to narrow the search, e.g. "161".'),
+    },
+    required: ["instructor"],
+  },
+  async run(a) {
+    if (!a.instructor || !String(a.instructor).trim()) {
+      throw new ApiError("instructor is required.");
+    }
+    const parsed = a.term ? parseTerm(a.term) : defaultRmpTerm();
+    const department = a.department ? await resolveScheduleDept(a.department) : undefined;
+    const data = await zotcourseSearch(
+      {
+        year: parsed.year,
+        quarter: parsed.quarter,
+        department,
+        courseNumber: a.courseNumber,
+        instructorName: String(a.instructor).trim(),
+        fullCourses: "ANY",
+      },
+      6 * 60 * 60 * 1000,
+    );
+
+    // Zotcourse filters by instructor at SECTION level, so a section co-taught by
+    // someone else comes back with both names attached. Collecting every name would
+    // present a colleague's rating as a second candidate for the person being looked
+    // up — a 1.98 beside a 3.79 reads as a comparison between them.
+    const needle = String(a.instructor).trim().toUpperCase();
+    const matchesQuery = (name) => String(name || "").toUpperCase().includes(needle);
+
+    const byInstructor = new Map();
+    for (const section of flattenWebsoc(data)) {
+      for (const rating of section.rmpRatings || []) {
+        if (!Number.isFinite(rating.average)) continue;
+        if (!matchesQuery(rating.instructor)) continue;
+        const key = `${rating.instructor}|${rating.url}`;
+        const current = byInstructor.get(key) || {
+          instructor: rating.instructor,
+          average: rating.average,
+          reviews: rating.reviews,
+          url: rating.url,
+          courses: new Set(),
+        };
+        current.courses.add(`${section.deptCode} ${section.courseNumber}`);
+        // If cached records disagree, prefer the record with more reviews.
+        if (rating.reviews > current.reviews) {
+          current.average = rating.average;
+          current.reviews = rating.reviews;
+        }
+        byInstructor.set(key, current);
+      }
+    }
+
+    const termLabel = `${parsed.year} ${parsed.quarter}`;
+    if (!byInstructor.size) {
+      return (
+        `No RMP rating was found for "${a.instructor}" in ${termLabel}. ` +
+        `The instructor may not be teaching in this term, may be listed under a different name, ` +
+        `or may not have an RMP profile.\n` +
+        `Search RMP: ${rmpProfileUrl(null, a.instructor)}\n\n${RMP_ATTRIBUTION}`
+      );
+    }
+
+    const rows = [...byInstructor.values()]
+      .sort((x, y) => y.average - x.average || y.reviews - x.reviews || x.instructor.localeCompare(y.instructor))
+      .map((rating) => [
+        rating.instructor,
+        `${rating.average.toFixed(2)}/5`,
+        rating.reviews || "-",
+        [...rating.courses].sort().join(", "),
+        rating.url,
+      ]);
+
+    return (
+      `RMP ratings matching "${a.instructor}" — ${termLabel}\n\n` +
+      table(["Instructor", "Rating", "Reviews", "Current course(s)", "RMP"], rows) +
+      `\n\nThe rating is an overall RMP score, not a course-specific score. ` +
+      `Compare it with get_course_grades, which uses UCI historical grade distributions.\n${RMP_ATTRIBUTION}`
+    );
+  },
+});
+
+/* -- 10. get_enrollment_history ---------------------------------------- */
 
 tool({
   name: "get_enrollment_history",
@@ -1404,7 +1796,7 @@ tool({
   },
 });
 
-/* -- 10. check_prerequisites ---------------------------------------- */
+/* -- 11. check_prerequisites ------------------------------------------- */
 
 const GRADE_RANK = { "A+": 12, A: 11, "A-": 10, "B+": 9, B: 8, "B-": 7, "C+": 6, C: 5, "C-": 4, "D+": 3, D: 2, "D-": 1, F: 0, P: 5 };
 
@@ -1533,7 +1925,7 @@ tool({
   },
 });
 
-/* -- 11. check_schedule -------------------------------------------- */
+/* -- 12. check_schedule ------------------------------------------------ */
 
 tool({
   name: "check_schedule",
@@ -1563,7 +1955,9 @@ tool({
     const codes = raw.map((c) => String(c).trim()).filter(Boolean);
     if (!codes.length) throw new ApiError("Provide at least one section code.");
 
-    const data = await api("/v2/rest/websoc", { year, quarter, sectionCodes: codes.join(","), cancelledCourses: "Include" }, 5 * 60 * 1000);
+    const { data, source } = await websoc({
+      year, quarter, sectionCodes: codes.join(","), cancelledCourses: "Include",
+    }, 5 * 60 * 1000);
     const rows = sortSections(flattenWebsoc(data));
     const found = new Set(rows.map((r) => r.sectionCode));
     const missing = codes.filter((c) => !found.has(c));
@@ -1679,11 +2073,10 @@ tool({
     let pairingUncheckable = false;
     for (const [courseId, picked] of selectedByCourse) {
       const head = picked[0];
-      const full = await api(
-        "/v2/rest/websoc",
+      const full = await websoc(
         { year, quarter, department: head.deptCode, courseNumber: head.courseNumber, cancelledCourses: "Include" },
         5 * 60 * 1000,
-      ).then(flattenWebsoc).catch(() => []);
+      ).then(({ data: fullData }) => flattenWebsoc(fullData)).catch(() => []);
 
       const offeredCompanions = full.filter((x) => COMPANION_TYPES.has(x.sectionType));
       const pickedPrimary = picked.filter((x) => PRIMARY_TYPES.has(x.sectionType));
@@ -1770,12 +2163,13 @@ tool({
           `course components only; it cannot check your major, prerequisites or registration window.`,
     );
 
-    L.push(`\n${ATTRIBUTION}`);
+    L.push(`\n${sourceAttribution(source)}`);
+    L.push(sourceNote(source));
     return L.join("\n");
   },
 });
 
-/* -- 12. recommend_courses ----------------------------------------- */
+/* -- 13. recommend_courses --------------------------------------------- */
 
 tool({
   name: "recommend_courses",
@@ -1806,14 +2200,14 @@ tool({
   },
   async run(a) {
     const { year, quarter } = parseTerm(a.term);
-    const department = a.department ? await resolveDept(a.department) : undefined;
+    const department = a.department ? await resolveScheduleDept(a.department) : undefined;
     if (!a.ge && !department) throw new ApiError("Provide at least a `ge` category or a `department` to search within.");
 
     const availability = a.availability || "OpenOnly";
     const fullCourses = availability === "OpenOnly" ? "SkipFullWaitlist" : availability === "OpenOrWaitlist" ? "SkipFull" : "ANY";
 
-    const [soc, grades] = await Promise.all([
-      api("/v2/rest/websoc", {
+    const [{ data: soc, source }, grades] = await Promise.all([
+      websoc({
         year, quarter, ge: a.ge, department,
         division: a.division, days: normalizeDays(a.days),
         startTime: normalizeTime(a.startAfter),
@@ -1898,12 +2292,13 @@ tool({
       `\n\nGPA/A%/n are historical across all past offerings of the course (all instructors), not this term's, ` +
       `and not specific to whoever is teaching it now — use get_course_grades to check that. ` +
       `A low n means an unreliable average. Use get_course_grades to compare instructors, search_sections for all ` +
-      `sections of a course, and check_schedule to test for conflicts.\n${ATTRIBUTION}`
+      `sections of a course, and check_schedule to test for conflicts.\n${sourceAttribution(source)}` +
+      sourceNote(source)
     );
   },
 });
 
-/* -- 13/14. programs ----------------------------------------------- */
+/* -- 14/15. programs --------------------------------------------------- */
 
 tool({
   name: "list_programs",
@@ -2252,7 +2647,7 @@ function buildApCreditCandidates(exams, apScores, maxCandidates = 512) {
   return { candidates, geCredits, unitsGranted, warnings };
 }
 
-/* -- 15. check_degree_progress ------------------------------------ */
+/* -- 16. check_degree_progress ---------------------------------------- */
 
 tool({
   name: "check_degree_progress",
@@ -2406,7 +2801,7 @@ tool({
   },
 });
 
-/* -- 16. get_syllabi ----------------------------------------------- */
+/* -- 17. get_syllabi --------------------------------------------------- */
 
 tool({
   name: "get_syllabi",
@@ -2518,7 +2913,7 @@ function rankExamMatches(exams, query, limit = 5) {
     .slice(0, limit);
 }
 
-/* -- 17. get_ap_credit ------------------------------------------------- */
+/* -- 18. get_ap_credit ------------------------------------------------- */
 
 /** Render the AND/OR tree the AP reward endpoint uses for granted courses. */
 function renderGrant(node) {
@@ -2616,7 +3011,7 @@ tool({
   },
 });
 
-/* -- 18. get_sample_program -------------------------------------------- */
+/* -- 19. get_sample_program -------------------------------------------- */
 
 tool({
   name: "get_sample_program",
@@ -2676,7 +3071,7 @@ tool({
   },
 });
 
-/* -- 19. get_course_materials ------------------------------------------ */
+/* -- 20. get_course_materials ------------------------------------------ */
 
 tool({
   name: "get_course_materials",
@@ -2773,7 +3168,7 @@ const INSTRUCTIONS = `Course search and registration planning for UC Irvine, bac
 Typical flow for "help me pick classes":
   1. list_terms — confirm which quarter the student means.
   2. recommend_courses or search_sections — find candidate sections that fit their constraints.
-  3. get_course_grades / get_instructor — compare professors; get_syllabi shows real workload.
+  3. get_course_grades / get_instructor — compare professors; get_rmp_ratings adds RMP review scores; get_syllabi shows real workload.
   4. get_enrollment_history — judge how hard the class is to get into and in what order to enrol.
   5. check_prerequisites — confirm eligibility; get_ap_credit resolves AP-score substitutions.
   6. check_schedule — validate the final section codes for meeting and final-exam conflicts.
@@ -2792,6 +3187,8 @@ Gotchas: department codes are WebSoc codes (COMPSCI, I&C SCI, BIO SCI) — list_
 resolves "CS". A bare "summer" is ambiguous; UCI has Summer1, Summer2 and Summer10wk.
 Seat counts are live but cached ~5 minutes. Grade data is historical and lags a quarter
 or two, and a small sample size makes an average GPA unreliable — always report it.
+RMP ratings are overall student-review scores, not course-specific or official UCI evaluations;
+always show the review count and link to the profile.
 Enrollment restrictions (major-only, graduate-only) are enforced by the registrar and are
 NOT visible in the prerequisite tree, so surface them separately.
 
@@ -2843,8 +3240,9 @@ const PROMPTS = [
       `Which professor should I take for ${course} at UCI?\n\n` +
       `1. get_course_grades for ${course}, grouped by instructor. Sort by average GPA but tell me the sample size for each — an average over 30 grades is noise next to one over 1500.\n` +
       (term ? `2. search_sections for ${course} in ${term} to see who is actually teaching it and at what time.\n` : `2. search_sections to see who is currently teaching it.\n`) +
-      `3. get_instructor on the realistic candidates, to see how they grade across all their courses, not just this one.\n` +
-      `4. get_syllabi for past offerings so I can see the real workload and grading breakdown.\n\n` +
+      `3. get_rmp_ratings for the realistic candidates, treating the review score as supplementary and showing the review count and link.\n` +
+      `4. get_instructor on the realistic candidates, to see how they grade across all their courses, not just this one.\n` +
+      `5. get_syllabi for past offerings so I can see the real workload and grading breakdown.\n\n` +
       `Then give me a recommendation, and say plainly where the data is too thin to support one.`,
   },
   {
