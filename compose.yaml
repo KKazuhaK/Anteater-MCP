@@ -2,19 +2,22 @@ name: anteater-mcp
 
 services:
   server:
-    # Override ANTEATER_MCP_IMAGE to run a locally built tag instead of the registry,
-    # which is what you need before the first release is cut, or for a fork.
-    image: ${ANTEATER_MCP_IMAGE:-ghcr.io/kkazuhak/anteater-mcp:${ANTEATER_MCP_IMAGE_TAG:-latest}}
-    pull_policy: ${ANTEATER_MCP_PULL_POLICY:-always}
+    image: ghcr.io/kkazuhak/anteater-mcp:latest
+    pull_policy: always
     restart: unless-stopped
     init: true
+    # Port exposure: choose ONE of the following.
+    # Default (recommended): loopback only; put nginx/Caddy/aaPanel HTTPS in front.
     ports:
-      - "127.0.0.1:${ANTEATER_MCP_PORT:-8787}:8787"
+      - "127.0.0.1:8787:8787"
+    # Public direct access: comment the line above and uncomment this line.
+    # Use HTTPS in front whenever possible; the MCP token is still required.
+    # - "8787:8787"
     environment:
       ANTEATER_MCP_TOKEN: "${ANTEATER_MCP_TOKEN:?set ANTEATER_MCP_TOKEN in .env}"
       ANTEATER_API_KEY: "${ANTEATER_API_KEY:-}"
-      ANTEATER_API_BASE: "${ANTEATER_API_BASE:-https://anteaterapi.com}"
-      ANTEATER_ALLOWED_ORIGINS: "${ANTEATER_ALLOWED_ORIGINS:-}"
+      ANTEATER_API_BASE: "https://anteaterapi.com"
+      ANTEATER_ALLOWED_ORIGINS: ""
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
@@ -22,13 +25,13 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    pids_limit: 128
     stop_grace_period: 15s
     deploy:
       resources:
         limits:
           cpus: "1.0"
           memory: 256M
+          pids: 128
     logging:
       driver: json-file
       options:

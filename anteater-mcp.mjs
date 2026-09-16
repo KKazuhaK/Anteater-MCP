@@ -2638,7 +2638,12 @@ function runHttp(port, host) {
     // that let you set headers will use, or as a path prefix (/<token>/mcp), because
     // the Claude connector UI takes only a URL. /health stays open for uptime checks.
     let path = url.pathname;
-    if (MCP_TOKEN && path !== "/health") {
+    // /health and /source carry no private information and are the two things an
+    // operator or a downstream user may legitimately need without credentials —
+    // /source in particular is the AGPL section 13 offer, which would be pointless
+    // if only an authenticated client could reach it.
+    const OPEN_PATHS = new Set(["/health", "/source"]);
+    if (MCP_TOKEN && !OPEN_PATHS.has(path)) {
       const header = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
       const viaHeader = header && secretEquals(header, MCP_TOKEN);
       const prefix = `/${MCP_TOKEN}`;

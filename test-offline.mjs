@@ -240,6 +240,13 @@ await test("HTTP transport enforces the token when one is set", async () => {
     assert.equal((await post("/mcp", { Authorization: `Bearer ${token}` })).status, 200, "correct bearer was rejected");
     assert.equal((await post(`/${token}/mcp`)).status, 200, "correct path token was rejected");
     assert.equal((await fetch(`http://127.0.0.1:${port}/health`)).status, 200, "health should stay open");
+    // The AGPL section 13 source offer must be reachable without credentials, or it
+    // is not an offer to the people the clause is about.
+    const src = await fetch(`http://127.0.0.1:${port}/source`, { redirect: "manual" });
+    assert.equal(src.status, 302, "/source should redirect without a token");
+    assert.match(src.headers.get("location") || "", /github\.com/, "/source should point at the repository");
+    // Everything else stays closed, including paths that do not exist.
+    assert.equal((await fetch(`http://127.0.0.1:${port}/nope`)).status, 401, "unknown paths should not leak");
     assert.doesNotMatch(stderr, /there is no authentication/, "authenticated public bind emitted a false warning");
   } finally {
     srv.kill();
