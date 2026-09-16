@@ -29,10 +29,14 @@
  */
 
 import http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import process from "node:process";
 
 const BASE = process.env.ANTEATER_API_BASE || "https://anteaterapi.com";
 const API_KEY = process.env.ANTEATER_API_KEY || "";
+// Shared secret for the HTTP transport. Unset means no auth, which is only safe on
+// loopback. Anything reachable from the internet must set it.
+const MCP_TOKEN = process.env.ANTEATER_MCP_TOKEN || "";
 const SOURCE_URL = "https://github.com/KKazuhaK/anteater-mcp";
 const UA = `anteater-mcp/1.0 (+${SOURCE_URL})`;
 
@@ -2574,6 +2578,14 @@ function runStdio() {
 
 /* ---- streamable HTTP transport ----------------------------------- */
 
+/** Constant-time string compare, so a wrong token cannot be found byte by byte. */
+function secretEquals(a, b) {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  if (x.length !== y.length) return false;
+  return timingSafeEqual(x, y);
+}
+
 function runHttp(port, host) {
   // This endpoint is unauthenticated, so a browser page that can reach it can drive
   // every tool. The MCP spec requires local HTTP servers to validate Origin; without
@@ -2611,9 +2623,26 @@ function runHttp(port, host) {
 
     const url = new URL(req.url, `http://${req.headers.host}`);
 
+    // Authentication. Accept the token either as a bearer header, which MCP clients
+    // that let you set headers will use, or as a path prefix (/<token>/mcp), because
+    // the Claude connector UI takes only a URL. /health stays open for uptime checks.
+    let path = url.pathname;
+    if (MCP_TOKEN && path !== "/health") {
+      const header = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+      const viaHeader = header && secretEquals(header, MCP_TOKEN);
+      const prefix = `/${MCP_TOKEN}`;
+      const viaPath = path === prefix || path.startsWith(`${prefix}/`);
+      if (viaPath) path = path.slice(prefix.length) || "/";
+      if (!viaHeader && !viaPath) {
+        res.writeHead(401, { ...CORS, "Content-Type": "text/plain", "WWW-Authenticate": "Bearer" })
+          .end("Unauthorized");
+        return;
+      }
+    }
+
     if (req.method === "OPTIONS") return res.writeHead(204, CORS).end();
 
-    if (url.pathname === "/health") {
+    if (path === "/health") {
       return res.writeHead(200, { ...CORS, "Content-Type": "application/json" })
         .end(JSON.stringify({
           ok: true,
@@ -2626,11 +2655,11 @@ function runHttp(port, host) {
         }));
     }
 
-    if (url.pathname === "/source") {
+    if (path === "/source") {
       return res.writeHead(302, { ...CORS, Location: SOURCE_URL }).end();
     }
 
-    if (url.pathname !== "/mcp") return res.writeHead(404, CORS).end("Not found. MCP endpoint is /mcp");
+    if (path !== "/mcp") return res.writeHead(404, CORS).end("Not found. MCP endpoint is /mcp");
 
     if (req.method === "GET") {
       // Clients may open an SSE stream for server-initiated messages; we have none.
@@ -2687,6 +2716,17 @@ function runHttp(port, host) {
   server.listen(port, host, () => {
     process.stderr.write(`anteater-mcp listening on http://${host}:${port}/mcp — ${TOOLS.length} tools\n`);
     process.stderr.write(`anteater-mcp is AGPL-3.0-or-later; source: ${SOURCE_URL} (also served at /source)\n`);
+    if (MCP_TOKEN) {
+      process.stderr.write(
+        `anteater-mcp auth ON — clients must send "Authorization: Bearer <token>", or use ` +
+          `the path form http://${host}:${port}/<token>/mcp\n`,
+      );
+    } else if (host !== "127.0.0.1" && host !== "localhost") {
+      process.stderr.write(
+        `anteater-mcp WARNING: no ANTEATER_MCP_TOKEN set and not bound to loopback — this ` +
+          `endpoint is unauthenticated. Set ANTEATER_MCP_TOKEN before exposing it.\n`,
+      );
+    }
     if (host !== "127.0.0.1" && host !== "localhost") {
       process.stderr.write(
         `anteater-mcp WARNING: bound to ${host}, so anyone who can reach this host can call ` +

@@ -136,6 +136,15 @@ detection.
 > down afterwards. See [HTTP mode security](#http-mode-security).
 </details>
 
+### On your phone
+
+Claude's iOS and Android apps support **remote** MCP servers. Deploy this behind HTTPS,
+add it once on claude.ai in a browser, and it syncs to the apps — you cannot add a new
+server from the phone itself. [DEPLOY.md](DEPLOY.md) has a complete recipe: token auth,
+a systemd unit, Caddy or nginx, and the connector setup.
+
+The [ChatGPT Custom GPT route](#chatgpt) also works on mobile and needs no server at all.
+
 ### Any other MCP client
 
 The server speaks standard MCP over stdio. Point your client at:
@@ -260,6 +269,7 @@ set -a; . ./.env; set +a # load it without echoing the value
 |---|---|
 | `ANTEATER_API_KEY` | Your secret key. See above. |
 | `ANTEATER_API_BASE` | Defaults to `https://anteaterapi.com`. Point at a self-hosted instance. |
+| `ANTEATER_MCP_TOKEN` | HTTP mode only, and **required before you expose the server**. Clients must then send `Authorization: Bearer <token>`, or use the path form `https://host/<token>/mcp` for clients that take only a URL. `/health` stays open. Unset means no authentication, which is only safe on loopback. |
 | `ANTEATER_ALLOWED_ORIGINS` | HTTP mode only. Comma-separated extra origins to allow. |
 | `HOST` / `PORT` | HTTP mode only; equivalent to `--host` / `--port`. |
 
@@ -283,6 +293,9 @@ node anteater-mcp.mjs --list-tools       # list every tool
   rebinding / CSRF). Requests with no `Origin` — native MCP clients — are allowed;
   requests with one must be localhost or listed in `ANTEATER_ALLOWED_ORIGINS`.
 - **`Access-Control-Allow-Origin` echoes the single validated origin**, never `*`.
+- **Unauthenticated unless `ANTEATER_MCP_TOKEN` is set.** That is fine on loopback and
+  not fine anywhere else; the server warns at startup if it is bound off-loopback without
+  one. See [DEPLOY.md](DEPLOY.md).
 - `/health` reports status and the source URL; `/source` redirects to this repository,
   which helps anyone deploying a modified copy comply with AGPL section 13.
 

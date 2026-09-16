@@ -174,6 +174,43 @@ await test("completions work offline and stay within the 100-value cap", async (
   assert.deepEqual(r.messages.find((m) => m.id === 2).result.completion.values, []);
 });
 
+await test("HTTP transport enforces the token when one is set", async () => {
+  const { spawn: sp } = await import("node:child_process");
+  const token = "offline-test-token-0123456789";
+  const port = 8931;
+  const srv = sp("node", ["anteater-mcp.mjs", "--http", "--port", String(port)], {
+    stdio: ["ignore", "ignore", "ignore"],
+    env: { ...process.env, ANTEATER_MCP_TOKEN: token },
+  });
+  try {
+    // Wait for the listener rather than sleeping a fixed amount.
+    for (let i = 0; i < 50; i++) {
+      try {
+        await fetch(`http://127.0.0.1:${port}/health`);
+        break;
+      } catch {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" });
+    const post = (path, headers = {}) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body,
+      });
+
+    assert.equal((await post("/mcp")).status, 401, "missing token was accepted");
+    assert.equal((await post("/mcp", { Authorization: "Bearer wrong" })).status, 401, "wrong token was accepted");
+    assert.equal((await post(`/wrongtoken/mcp`)).status, 401, "wrong path token was accepted");
+    assert.equal((await post("/mcp", { Authorization: `Bearer ${token}` })).status, 200, "correct bearer was rejected");
+    assert.equal((await post(`/${token}/mcp`)).status, 200, "correct path token was rejected");
+    assert.equal((await fetch(`http://127.0.0.1:${port}/health`)).status, 200, "health should stay open");
+  } finally {
+    srv.kill();
+  }
+});
+
 await test("term parsing reaches all six quarters", async () => {
   const src = await import("node:fs").then((fs) => fs.promises.readFile("anteater-mcp.mjs", "utf8"));
   const block = src.slice(src.indexOf("const QUARTERS = "), src.indexOf("let _deptCache"));

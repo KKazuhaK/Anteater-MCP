@@ -49,7 +49,7 @@ set -a; . ./.env; set +a
 node test-offline.mjs
 ```
 
-**Expected:** all 14 items `ok`, final line `14 passed`, exit code 0.
+**Expected:** all 15 items `ok`, final line `15 passed`, exit code 0.
 
 <details><summary>What each test guards against</summary>
 
@@ -68,6 +68,7 @@ node test-offline.mjs
 | prompts declare arguments and enforce required ones | A missing required argument must be refused, not silently templated |
 | unknown prompt / resource are protocol errors | |
 | completions work offline and respect the 100-value cap | |
+| HTTP transport enforces the token when one is set | An exposed endpoint with no auth is an open proxy on your API quota |
 </details>
 
 ---
@@ -306,7 +307,26 @@ curl -s -o /dev/null -w "local=%{http_code}\n" -X POST localhost:8911/mcp \
 ✅ `evil=403`, `none=200`, `local=200`
 ❌ `evil=200` — any web page could drive your local server (DNS rebinding / CSRF)
 
-### 4.4 AGPL section 13 source offer
+### 4.4 Token auth on the HTTP transport
+
+```bash
+TOK=$(openssl rand -hex 16)
+ANTEATER_MCP_TOKEN=$TOK node anteater-mcp.mjs --http --port 8913 &
+sleep 2
+P='{"jsonrpc":"2.0","id":1,"method":"ping"}'
+for c in "curl -s -o /dev/null -w no-token=%{http_code}\\n -X POST localhost:8913/mcp -H Content-Type:application/json -d $P"; do :; done
+curl -s -o /dev/null -w "  no token   = %{http_code}\n" -X POST localhost:8913/mcp -H 'Content-Type: application/json' -d "$P"
+curl -s -o /dev/null -w "  bad bearer = %{http_code}\n" -X POST localhost:8913/mcp -H "Authorization: Bearer nope" -H 'Content-Type: application/json' -d "$P"
+curl -s -o /dev/null -w "  good bearer= %{http_code}\n" -X POST localhost:8913/mcp -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d "$P"
+curl -s -o /dev/null -w "  path form  = %{http_code}\n" -X POST "localhost:8913/$TOK/mcp" -H 'Content-Type: application/json' -d "$P"
+curl -s -o /dev/null -w "  health     = %{http_code}\n" localhost:8913/health
+kill %1
+```
+✅ `401, 401, 200, 200, 200`
+❌ Any `200` for the first two — an exposed endpoint with no working auth is an open proxy
+on your Anteater API quota
+
+### 4.5 AGPL section 13 source offer
 
 ```bash
 curl -s localhost:8911/health | python3 -m json.tool | grep -E "license|source"
@@ -317,7 +337,7 @@ kill %1
 `/source` returns `302`
 ❌ Missing — anyone running a modified copy as a network service needs this to comply
 
-### 4.5 No dependencies crept in
+### 4.6 No dependencies crept in
 
 ```bash
 test -d node_modules && echo "FAIL: node_modules exists" || echo "PASS: no node_modules"
