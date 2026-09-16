@@ -46,9 +46,13 @@ it carries the token, as either:
 
 ## 2. Deploy with Docker Compose (recommended)
 
-The release image is built for Linux amd64 and arm64. The supplied Compose definition
-binds only to loopback, runs without Linux capabilities, uses a read-only root filesystem,
-and refuses to start until a token is provided.
+The supplied Compose definition binds only to loopback, runs without Linux capabilities,
+uses a read-only root filesystem, and refuses to start until a token is provided.
+
+> **The published image only exists once a release is tagged.** `ghcr.io/kkazuhak/anteater-mcp`
+> is built and pushed by the release workflow, which runs on a `v*` tag. If no release has
+> been cut yet, `docker compose up` fails with `manifest unknown` — use
+> [Build the image yourself](#build-the-image-yourself) below, or tag a release first.
 
 ```bash
 mkdir -p /opt/anteater-mcp
@@ -75,6 +79,37 @@ Use `ANTEATER_MCP_IMAGE_TAG=v1.0.0` in `.env` to pin an immutable release instea
 tracking `latest`. Continue at [Terminate TLS](#5-terminate-tls) to expose it safely.
 If the first pull asks you to authenticate, the repository owner has not yet changed the
 new GHCR package from its initial private visibility to **Public**.
+
+### Build the image yourself
+
+Works with no release published, and is also what you want for a fork. The image is one
+file plus a base layer, so this takes seconds.
+
+```bash
+git clone https://github.com/KKazuhaK/anteater-mcp.git /opt/anteater-mcp-src
+cd /opt/anteater-mcp-src
+docker build -t anteater-mcp:local .
+
+cd /opt/anteater-mcp
+# point Compose at the local tag instead of the registry
+echo "ANTEATER_MCP_IMAGE=anteater-mcp:local" >> .env
+docker compose up -d
+```
+
+For that to take effect, `compose.yaml` reads `ANTEATER_MCP_IMAGE`; set
+`pull_policy: never` too if you want Compose to refuse to reach the registry at all.
+
+### Cutting the release that produces the image
+
+```bash
+npm run check:version          # package.json and the server must agree
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+The release workflow validates the tag against the package version, rebuilds the test
+gates, produces the standalone binaries, and pushes the container image. Afterwards, make
+the new GHCR package **Public** in the repository's package settings — it is private by
+default, and a private package is why a first pull would ask you to log in.
 
 ## 3. Install manually on the server
 

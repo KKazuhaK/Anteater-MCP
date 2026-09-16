@@ -2,8 +2,10 @@ name: anteater-mcp
 
 services:
   server:
-    image: ghcr.io/kkazuhak/anteater-mcp:${ANTEATER_MCP_IMAGE_TAG:-latest}
-    pull_policy: always
+    # Override ANTEATER_MCP_IMAGE to run a locally built tag instead of the registry,
+    # which is what you need before the first release is cut, or for a fork.
+    image: ${ANTEATER_MCP_IMAGE:-ghcr.io/kkazuhak/anteater-mcp:${ANTEATER_MCP_IMAGE_TAG:-latest}}
+    pull_policy: ${ANTEATER_MCP_PULL_POLICY:-always}
     restart: unless-stopped
     init: true
     ports:
