@@ -1,6 +1,6 @@
 {
   "name": "anteater-mcp",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "MCP server for UCI course search and registration planning, backed by Anteater API. Live section availability, grade distributions by professor, enrollment history, prerequisite checking and schedule conflict detection.",
   "keywords": [
     "mcp",
