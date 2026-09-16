@@ -310,6 +310,10 @@ node test-offline.mjs   # 14 conformance tests; makes no API calls
 node test.mjs           # 33 live calls; needs a key in practice
 ```
 
+[UPSTREAM.md](UPSTREAM.md) records the exact Anteater API version and the upstream commits
+this server was validated against, endpoint by endpoint — start there when the API changes
+and something begins returning wrong or empty results.
+
 [VERIFICATION.md](VERIFICATION.md) is a full release checklist — per-regression pass
 criteria, security checks and integration checks — written so someone who has never read
 the code can run it.
