@@ -2,7 +2,7 @@
 
 # Pin both the Node patch release and the multi-platform manifest digest. Dependabot
 # updates this reference so releases are reproducible without silently freezing fixes.
-FROM node:24.21.0-alpine3.23@sha256:159fe64649038c30f8cc1ec4be3af3a6e93e3648678c31294e2c5058dbeb99f3
+FROM node:26.8-alpine3.23@sha256:a3024faf41c40992531ecfb00604384665be870a44626afaf181c6d583f89296
 
 ARG VERSION=dev
 ARG VCS_REF=unknown
