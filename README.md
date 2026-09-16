@@ -5,7 +5,7 @@ An MCP server that lets Claude and ChatGPT help you pick classes at UC Irvine.
 It wraps [Anteater API](https://icssc.link/about-anteaterapi) — UCI's course catalogue,
 the live schedule of classes (WebSoc), historical grade distributions, enrollment
 history, prerequisite trees, AP credit and degree requirements — and exposes them as
-**16 tools, 6 guided prompts and 4 reference resources**, shaped around the questions
+**17 tools, 6 guided prompts and 4 reference resources**, shaped around the questions
 students actually ask.
 
 **Zero dependencies.** One file, Node >= 18. No `npm install`, ever.
@@ -176,6 +176,7 @@ the server negotiates down rather than echoing whatever it is sent.
 | `instructor_info` | A professor's courses and the grades they actually give |
 | `enrollment_history` | Day-by-day fill curves — *"will I get in?"* |
 | `get_syllabi` | Links to syllabi from past offerings — real workload and grading breakdown |
+| `course_materials` | Required and recommended textbooks, with ISBNs and UCI Library links |
 
 **Checking you can actually enrol**
 
@@ -197,7 +198,7 @@ Four of these compute things the upstream API does not provide: prerequisite-tre
 evaluation, schedule conflict detection, the join between the live schedule and
 historical grade data, and AP-grant rendering.
 
-All 16 are annotated `readOnlyHint: true` — nothing here mutates anything.
+All 17 are annotated `readOnlyHint: true` — nothing here mutates anything.
 
 ### Prompts (6)
 
@@ -321,9 +322,11 @@ calls**, so it never draws on the public rate limit.
 
 Anteater API also serves dining halls, library traffic and study-room bookings. Those are
 deliberately not wrapped — this server stays focused on choosing and registering for
-classes. LARC tutoring sections and course materials *are* in scope but return no data
-upstream at present, so they are not wrapped either; adding a tool that always returns
-nothing is worse than not having one.
+classes.
+
+LARC tutoring sections are in scope but effectively dead upstream: `/v2/rest/larc` returns
+22 courses for 2024 Fall and nothing for any term since, so a tool would always answer
+"none" for the term a student is actually planning.
 
 ---
 
@@ -406,6 +409,10 @@ Undocumented upstream; all handled here, and listed in case they save you the de
   `key is required` you get with no key at all — worth distinguishing, since telling
   someone who already has a key to get a key is a dead end.
 - **`/v2/rest/websoc/syllabi` takes `courseId`**, not `department` + `courseNumber`.
+- **`/v2/rest/courseMaterials` needs `department` AND `courseNumber` together.** Either
+  alone is refused, and it collapses the three summer sessions into a single `Summer`.
+- **Restriction strings contain prose.** `"A and N"` must be split on whitespace *and*
+  have the literal `and`/`or` discarded, or the conjunction renders as a code.
 
 ---
 

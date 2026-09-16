@@ -85,7 +85,7 @@ await test("initialize honours a version we do implement", async () => {
 await test("every tool exposes a valid object inputSchema", async () => {
   const r = await send([{ jsonrpc: "2.0", id: 1, method: "tools/list" }]);
   const tools = r.messages[0].result.tools;
-  assert.equal(tools.length, 16);
+  assert.equal(tools.length, 17);
   for (const t of tools) {
     assert.equal(t.inputSchema.type, "object", `${t.name}: inputSchema is not an object`);
     assert.ok(t.description?.length > 40, `${t.name}: description too thin`);

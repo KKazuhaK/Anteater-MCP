@@ -79,7 +79,7 @@ set -a; . ./.env; set +a
 node test.mjs
 ```
 
-**Expected:** 40 calls total (`initialize` + `tools/list` + 38 `tools/call`). Exactly
+**Expected:** 42 calls total (`initialize` + `tools/list` + 40 `tools/call`). Exactly
 **three** `[isError]` results, and they are the three deliberate error cases at the end:
 
 ```
@@ -334,7 +334,7 @@ Put the contents of `claude_desktop_config.example.json` into
 `~/Library/Application Support/Claude/claude_desktop_config.json`, replacing the path
 with an absolute one. Restart.
 
-✅ **16** anteater tools appear in the tool list
+✅ **17** anteater tools appear in the tool list
 ✅ The **6 prompts** appear as slash commands (`plan-quarter`, `find-easy-ge`, …)
 ✅ Asking *"which GE-2 courses for Fall 2026 still have seats and end before 5pm"*
 returns a table with 5-digit section codes

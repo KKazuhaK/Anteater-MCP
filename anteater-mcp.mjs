@@ -444,6 +444,22 @@ const RESTRICTION_LEGEND = {
   X: "Separate authorization codes required to add, drop, or change enrollment",
 };
 
+/**
+ * WebSoc writes restrictions as prose, e.g. "A and N" or "A or B". Splitting on
+ * whitespace alone leaves the literal conjunctions in the list, which then render as
+ * codes. Keep only letters the registrar actually defines.
+ */
+function parseRestrictionCodes(restrictions) {
+  return [
+    ...new Set(
+      String(restrictions || "")
+        .split(/[\s,]+/)
+        .map((c) => c.trim().toUpperCase())
+        .filter((c) => RESTRICTION_LEGEND[c]),
+    ),
+  ];
+}
+
 function pct(n, total) {
   if (!total) return "  -";
   return `${Math.round((n / total) * 100)}%`.padStart(3);
@@ -931,7 +947,7 @@ tool({
         table(
           ["Code", "Type", "Sec", "Units", "Meets", "Instructor", "Seats", "Status", "Final", "Restr", "!"],
           secs.map((s) => {
-            (s.restrictions || "").split(/[\s,]+/).filter(Boolean).forEach((c) => seenRestrictions.add(c));
+            parseRestrictionCodes(s.restrictions).forEach((c) => seenRestrictions.add(c));
             return [
               s.sectionCode,
               s.sectionType,
@@ -957,7 +973,7 @@ tool({
       out.push("");
     }
 
-    const legend = [...seenRestrictions].filter((c) => RESTRICTION_LEGEND[c]).map((c) => `${c}=${RESTRICTION_LEGEND[c]}`);
+    const legend = [...seenRestrictions].sort().map((c) => `${c}=${RESTRICTION_LEGEND[c]}`);
     if (legend.length) out.push(`Restriction codes: ${legend.join("; ")}`);
     if (truncated) out.push(`(Truncated — more sections matched. Narrow the filters or raise \`limit\`.)`);
     out.push(
@@ -1705,7 +1721,7 @@ tool({
       const cur = byCourse.get(key) || { deptCode: r.deptCode, courseNumber: r.courseNumber, title: r.courseTitle, sections: 0, seats: 0, units: r.units, meets: [], codes: [], sectionTypes: new Set(), restrictions: new Set() };
       cur.sections += 1;
       cur.seats += seats;
-      for (const code of (r.restrictions || "").split(/[\s,]+/).filter(Boolean)) cur.restrictions.add(code);
+      for (const code of parseRestrictionCodes(r.restrictions)) cur.restrictions.add(code);
       if (cur.meets.length < 3) cur.meets.push(meetingText(r.meetings));
       cur.sectionTypes.add(r.sectionType);
       if (cur.codes.length < 3) cur.codes.push(r.sectionCode);
@@ -1745,14 +1761,14 @@ tool({
           [...c.sectionTypes].join("/"),
           c.sections,
           c.seats,
-          [...c.restrictions].join("") || "",
+          [...c.restrictions].sort().join(",") || "",
           trunc(c.meets[0] || "", 30),
           c.codes[0],
         ]),
       ) +
       (() => {
         const seen = new Set(shown.flatMap((c) => [...c.restrictions]));
-        const legend = [...seen].filter((x) => RESTRICTION_LEGEND[x]).map((x) => `${x}=${RESTRICTION_LEGEND[x]}`);
+        const legend = [...seen].sort().map((x) => `${x}=${RESTRICTION_LEGEND[x]}`);
         return legend.length
           ? `\n\nRestriction codes above: ${legend.join("; ")}. A restriction you do not satisfy ` +
             `means you cannot enrol, however good the GPA looks.`
@@ -2049,6 +2065,94 @@ tool({
     );
     L.push(ATTRIBUTION);
     return L.join("\n");
+  },
+});
+
+/* -- 17. course_materials ------------------------------------------ */
+
+tool({
+  name: "course_materials",
+  title: "Textbooks and materials for a course",
+  description:
+    "Required and recommended textbooks for a course, with ISBNs and a UCI Library link for each. " +
+    "Use to tell a student what a course will cost them and whether the library already has it. " +
+    "Records are per section and per term, so the same course can list different books for different " +
+    "instructors.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      courseId: str('Course, e.g. "WRITING 60". Department and course number are both required by the API.'),
+      department: str("Alternative to courseId: department code."),
+      courseNumber: str("Alternative to courseId: course number."),
+      year: str('Restrict to a year, e.g. "2026".'),
+      quarter: str("Restrict to a quarter.", { enum: QUARTERS }),
+      instructor: str("Restrict to one instructor."),
+      requirement: str("Restrict to required or recommended materials.", { enum: ["Required", "Recommended"] }),
+    },
+  },
+  async run(a) {
+    let department = a.department ? await resolveDept(a.department) : undefined;
+    let courseNumber = a.courseNumber;
+    if (a.courseId) ({ department, courseNumber } = await splitCourse(a.courseId));
+    if (!department || !courseNumber) {
+      throw new ApiError("This endpoint needs both a department and a course number — pass courseId, or both fields.");
+    }
+
+    const list = await api(
+      "/v2/rest/courseMaterials",
+      {
+        department,
+        courseNumber,
+        year: a.year,
+        // The materials endpoint collapses the three summer sessions into "Summer".
+        quarter: a.quarter ? (a.quarter.startsWith("Summer") ? "Summer" : a.quarter) : undefined,
+        instructor: a.instructor ? await resolveInstructor(a.instructor) : undefined,
+        requirement: a.requirement,
+      },
+      24 * 3600 * 1000,
+    );
+
+    if (!list?.length) {
+      return (
+        `No materials on record for ${department} ${courseNumber}` +
+        `${a.year || a.quarter ? ` in ${[a.year, a.quarter].filter(Boolean).join(" ")}` : ""}. ` +
+        `Coverage is uneven — many courses post nothing, and a term's list often appears only ` +
+        `close to the start of instruction.`
+      );
+    }
+
+    const rows = list
+      .slice()
+      .sort((x, y) => termSortKey(y.year, y.quarter).localeCompare(termSortKey(x.year, x.quarter)))
+      .map((m) => [
+        `${m.year} ${m.quarter}`,
+        m.sectionCode || "",
+        trunc((m.instructors || []).join(", "), 18),
+        m.requirement || "",
+        trunc(m.title || "", 38),
+        trunc(m.author || "", 18),
+        m.edition || "",
+        m.format || "",
+        // The ISBN field carries every variant edition; the first is enough to search on.
+        (m.isbn || "").split(";")[0].trim(),
+      ]);
+
+    const required = list.filter((m) => /required/i.test(m.requirement || "")).length;
+    const withLink = list.filter((m) => m.link).length;
+
+    return (
+      `Materials for ${department} ${courseNumber} — ${list.length} record(s), ${required} required\n\n` +
+      table(["Term", "Section", "Instructor", "Req", "Title", "Author", "Ed", "Format", "ISBN"], rows) +
+      (withLink
+        ? `\n\nUCI Library links (check availability before buying):\n` +
+          [...new Map(list.filter((m) => m.link).map((m) => [m.title, m])).values()]
+            .slice(0, 12)
+            .map((m) => `  ${trunc(m.title, 46)}\n    ${m.link}`)
+            .join("\n")
+        : "") +
+      `\n\nMaterials are listed per section, so confirm against the section you actually enrol in. ` +
+      `"Format: Both" means print and digital are both listed.\n${ATTRIBUTION}`
+    );
   },
 });
 

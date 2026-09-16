@@ -31,6 +31,8 @@ const CALLS = [
   ["tools/call", { name: "recommend_courses", arguments: { term: "2026 Fall", ge: "GE-1A", limit: 5 } }],      // was empty: seminar-only GE hidden by sectionType Lec
   ["tools/call", { name: "list_departments", arguments: { filter: "CS" } }],                                   // alias fallback
   ["tools/call", { name: "get_program_requirements", arguments: { kind: "ugrad", block: "GE" } }],              // was always failing: missing id
+  ["tools/call", { name: "course_materials", arguments: { courseId: "WRITING 60" } }],
+  ["tools/call", { name: "course_materials", arguments: { courseId: "COMPSCI 161" } }],
   // regressions from driving the server through real student scenarios
   ["tools/call", { name: "check_schedule", arguments: { term: "2026 Fall", sectionCodes: "34190,34191" } }],   // string form used to throw a raw TypeError
   ["tools/call", { name: "check_schedule", arguments: { term: "2026 Fall", sectionCodes: ["36045"] } }],        // lecture with no lab: must NOT be an all-clear
