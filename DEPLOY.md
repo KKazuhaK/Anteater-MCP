@@ -75,8 +75,8 @@ docker compose pull
 docker compose up -d
 ```
 
-Use `ANTEATER_MCP_IMAGE_TAG=v1.0.0` in `.env` to pin an immutable release instead of
-tracking `latest`. Continue at [Terminate TLS](#5-terminate-tls) to expose it safely.
+Use `ANTEATER_MCP_IMAGE_TAG=v0.0.1` in `.env` to pin an immutable release instead of
+tracking `latest`. Continue at [Put it behind TLS](#5-put-it-behind-tls) to expose it safely.
 If the first pull asks you to authenticate, the repository owner has not yet changed the
 new GHCR package from its initial private visibility to **Public**.
 
@@ -103,7 +103,7 @@ For that to take effect, `compose.yaml` reads `ANTEATER_MCP_IMAGE`; set
 
 ```bash
 npm run check:version          # package.json and the server must agree
-git tag v1.0.0 && git push origin v1.0.0
+git tag v0.0.1 && git push origin v0.0.1
 ```
 
 The release workflow validates the tag against the package version, rebuilds the test
@@ -175,44 +175,96 @@ curl -s localhost:8787/health
 The startup log tells you whether auth is on. If it warns that no token is set, stop and
 fix that before going further.
 
-## 5. Terminate TLS
+## 5. Put it behind TLS
 
-**Caddy** gets a certificate on its own:
+Use whatever you already run. The server speaks plain HTTP on loopback and does not care
+what fronts it — it only has to satisfy five requirements, because of SSE and because the
+token travels in the path.
 
-```caddyfile
-mcp.example.com {
-    # The token travels in the path, so keep it out of the access log.
-    log {
-        output file /var/log/caddy/anteater-mcp.log
-        format filter {
-            request>uri delete
-        }
-    }
-    reverse_proxy 127.0.0.1:8787
-}
-```
+| Requirement | Why | If you get it wrong |
+|---|---|---|
+| **Do not buffer responses** | `GET /mcp` is a Server-Sent Events stream, and `POST /mcp` returns SSE when the client asks for it | The client hangs waiting for a response the proxy is holding |
+| **Read timeout above 25 seconds**, 300s is comfortable | The SSE stream sends a keepalive comment every 25s and is otherwise silent | The proxy drops the stream mid-conversation |
+| **HTTP/1.1 upstream** | Chunked responses and keep-alive | Streaming breaks; nginx in particular defaults to 1.0 |
+| **Pass the path through unchanged** | The token is a path prefix (`/<token>/mcp`) | Every request 401s |
+| **Do not add an `Origin` header** | The server validates `Origin` when one is present, and allows requests without one, which is what Claude and ChatGPT send | A proxy-injected origin gets 403 |
 
-**nginx**, if you already run it:
+Two more things that are not requirements but you want them: **keep the URI out of access
+logs**, since the token is in it, and let the proxy hold the certificate so the server
+never sees one.
+
+<details open><summary><b>nginx</b></summary>
 
 ```nginx
 server {
-    listen 443 ssl http2;
+    listen 443 ssl;
+    http2 on;
     server_name mcp.example.com;
     # ssl_certificate / ssl_certificate_key from certbot
 
-    access_log off;   # the token is in the URI
+    access_log off;                      # the token is in the URI
 
     location / {
         proxy_pass http://127.0.0.1:8787;
-        proxy_http_version 1.1;
+        proxy_http_version 1.1;          # required for streaming
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # SSE responses must not be buffered
-        proxy_buffering off;
-        proxy_read_timeout 300s;
+        proxy_buffering off;             # required for SSE
+        proxy_cache off;
+        proxy_read_timeout 300s;         # keepalives are 25s apart
     }
 }
 ```
+</details>
+
+<details><summary><b>Caddy</b></summary>
+
+```caddyfile
+mcp.example.com {
+    log {
+        output file /var/log/caddy/anteater-mcp.log
+        format filter {
+            request>uri delete           # the token is in the URI
+        }
+    }
+    reverse_proxy 127.0.0.1:8787 {
+        flush_interval -1                # never buffer, for SSE
+    }
+}
+```
+</details>
+
+<details><summary><b>Traefik</b>, if it already fronts your Compose stack</summary>
+
+Add to the `server` service in `compose.yaml`, and drop the `ports:` mapping so only
+Traefik reaches it:
+
+```yaml
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.anteater.rule: Host(`mcp.example.com`)
+      traefik.http.routers.anteater.entrypoints: websecure
+      traefik.http.routers.anteater.tls.certresolver: myresolver
+      traefik.http.services.anteater.loadbalancer.server.port: "8787"
+      # Traefik does not buffer by default; do not add a buffering middleware here.
+```
+</details>
+
+<details><summary><b>Cloudflare Tunnel</b>, no open ports at all</summary>
+
+```yaml
+# ~/.cloudflared/config.yml
+ingress:
+  - hostname: mcp.example.com
+    service: http://127.0.0.1:8787
+    originRequest:
+      disableChunkedEncoding: false      # leave chunking on, for SSE
+  - service: http_status:404
+```
+
+Proxied Cloudflare hostnames buffer some responses; if a stream stalls, set the route to
+**DNS only**, or use one of the proxies above instead.
+</details>
 
 Check it from outside your network:
 
