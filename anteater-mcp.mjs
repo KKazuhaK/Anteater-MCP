@@ -2636,7 +2636,8 @@ function runHttp(port, host) {
 
     // Authentication. Accept the token either as a bearer header, which MCP clients
     // that let you set headers will use, or as a path prefix (/<token>/mcp), because
-    // the Claude connector UI takes only a URL. /health stays open for uptime checks.
+    // a connector UI offers no header field. Prefer the header: a token in the path
+    // ends up in proxy access logs and in the stored connector URL.
     let path = url.pathname;
     // /health and /source carry no private information and are the two things an
     // operator or a downstream user may legitimately need without credentials —

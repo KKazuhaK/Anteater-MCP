@@ -34,8 +34,10 @@ Set it as `ANTEATER_MCP_TOKEN`. With it set, the HTTP transport accepts a reques
 it carries the token, as either:
 
 - `Authorization: Bearer <token>` — use this wherever you can set headers, and
-- `https://your.domain/<token>/mcp` — the path form, for clients like the Claude connector
-  UI that take only a URL.
+- `https://your.domain/<token>/mcp` — the path form, for clients that accept only a URL.
+
+**Prefer the header wherever the client allows one.** Claude's connector dialog has a
+*Request headers* section, so the token does not have to go in the URL there.
 
 `/health` stays open so uptime checks work without the token.
 
@@ -292,9 +294,20 @@ and any other MCP client you use from a laptop.
 On **claude.ai in a browser** (not the phone):
 
 1. **Settings → Connectors → Add custom connector**
-2. URL: `https://mcp.example.com/<token>/mcp`
-3. Leave the OAuth fields empty — this server uses the token in the URL
-4. Save, then confirm the 17 tools appear
+2. URL: `https://mcp.example.com/mcp` — no token in the URL
+3. Leave **No sign-in** selected. Claude warns that anyone with the URL could then use
+   the connector, which is exactly what the next step answers.
+4. Under **Request headers**, add `Authorization` = `Bearer <your token>`. Claude stores
+   header values encrypted and never displays them again.
+5. Save, then confirm the 17 tools appear
+
+Putting the token in a header rather than the path keeps it out of your reverse proxy's
+access log and out of the stored connector URL. The path form still works for clients
+with no header field:
+
+```
+https://mcp.example.com/<token>/mcp
+```
 
 Free accounts can have one custom connector; Pro and Max more.
 

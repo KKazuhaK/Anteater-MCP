@@ -190,7 +190,7 @@ the Claude one, only the connector UI differs.
 | | Custom GPT + Actions | Developer mode + MCP |
 |---|---|---|
 | Server needed | No | Yes, public HTTPS |
-| Auth options | None · API Key (Basic/Bearer/**custom header**) · OAuth | OAuth · none · mixed — **no custom header**, so use the path token |
+| Auth options | None · API Key (Basic/Bearer/**custom header**) · OAuth | OAuth · none · mixed. Developer mode documents no header field, so use the path token; Claude's own connector dialog *does* take request headers |
 | Can carry your Anteater key | Yes, API Key → Bearer | Yes, server-side via `ANTEATER_API_KEY` |
 | What the model gets | 12 raw API operations, JSON | All 17 tools, formatted, plus 6 prompts and 4 resources |
 | Prerequisite / conflict checking | No — the model must reason it out | Yes |
@@ -329,7 +329,7 @@ set -a; . ./.env; set +a # load it without echoing the value
 |---|---|
 | `ANTEATER_API_KEY` | Your secret key. See above. |
 | `ANTEATER_API_BASE` | Defaults to `https://anteaterapi.com`. Point at a self-hosted instance. |
-| `ANTEATER_MCP_TOKEN` | HTTP mode only, and **required before you expose the server**. Clients must then send `Authorization: Bearer <token>`, or use the path form `https://host/<token>/mcp` for clients that take only a URL. `/health` stays open. Unset means no authentication, which is only safe on loopback. |
+| `ANTEATER_MCP_TOKEN` | HTTP mode only, and **required before you expose the server**. Clients send `Authorization: Bearer <token>`, which is preferred, or use the path form `https://host/<token>/mcp` where the client has no header field. A token in the path lands in proxy access logs. `/health` stays open. Unset means no authentication, which is only safe on loopback. |
 | `ANTEATER_ALLOWED_ORIGINS` | HTTP mode only. Comma-separated extra origins to allow. |
 | `HOST` / `PORT` | HTTP mode only; equivalent to `--host` / `--port`. |
 
