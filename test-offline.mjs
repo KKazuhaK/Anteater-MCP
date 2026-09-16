@@ -413,6 +413,66 @@ await test("REST facade mirrors the MCP tools and generates a usable OpenAPI doc
   }
 });
 
+await test("forwarded headers are believed only from a trusted proxy", async () => {
+  const { spawn: sp } = await import("node:child_process");
+
+  const start = async (port, trusted) => {
+    const env = { ...process.env };
+    if (trusted) env.ANTEATER_TRUSTED_PROXIES = trusted;
+    else delete env.ANTEATER_TRUSTED_PROXIES;
+    const srv = sp("node", ["anteater-mcp.mjs", "--http", "--port", String(port)], {
+      stdio: ["ignore", "ignore", "pipe"], env,
+    });
+    let log = "";
+    srv.stderr.on("data", (d) => (log += d));
+    for (let i = 0; i < 50; i++) {
+      try { await fetch(`http://127.0.0.1:${port}/health`); break; }
+      catch { await new Promise((r) => setTimeout(r, 100)); }
+    }
+    return { srv, log: () => log };
+  };
+
+  const remotes = (log) => [...log.matchAll(/"remote":"([^"]*)"/g)].map((m) => m[1]);
+
+  // Untrusted: the header is client-supplied, so it must be ignored entirely.
+  {
+    const { srv, log } = await start(8933, null);
+    try {
+      await fetch("http://127.0.0.1:8933/health", {
+        headers: { "X-Forwarded-For": "203.0.113.9", "X-Forwarded-Host": "evil.example", "X-Forwarded-Proto": "https" },
+      });
+      const spec = await (await fetch("http://127.0.0.1:8933/openapi.json", {
+        headers: { "X-Forwarded-Host": "evil.example", "X-Forwarded-Proto": "https" },
+      })).json();
+      assert.ok(!spec.servers[0].url.includes("evil.example"), "a spoofed host reached the OpenAPI document");
+      await new Promise((r) => setTimeout(r, 100));
+      assert.ok(!remotes(log()).includes("203.0.113.9"), "a spoofed client address reached the log");
+      assert.match(log(), /ANTEATER_TRUSTED_PROXIES is unset/, "no hint explaining why forwarding was ignored");
+    } finally { srv.kill(); }
+  }
+
+  // Trusted: resolve the client from the right, skipping our own proxies.
+  {
+    const { srv, log } = await start(8934, "private,loopback");
+    try {
+      const hit = (xff) => fetch("http://127.0.0.1:8934/health", { headers: { "X-Forwarded-For": xff } });
+      await hit("203.0.113.9, 172.21.0.1");   // nginx appended its own hop
+      await hit("203.0.113.9");               // nginx replaced with the client
+      await hit("10.0.0.5, 192.168.1.1");     // nothing but proxies -> fall back to the peer
+      await hit("not-an-ip, 203.0.113.9");    // junk entries are skipped
+      await hit("2001:db8::1");               // IPv6 client
+      await new Promise((r) => setTimeout(r, 150));
+      const got = remotes(log()).slice(-5);
+      assert.deepEqual(got, ["203.0.113.9", "203.0.113.9", "127.0.0.1", "203.0.113.9", "2001:db8::1"]);
+
+      const spec = await (await fetch("http://127.0.0.1:8934/openapi.json", {
+        headers: { "X-Forwarded-Host": "anteater.example.com", "X-Forwarded-Proto": "https" },
+      })).json();
+      assert.equal(spec.servers[0].url, "https://anteater.example.com");
+    } finally { srv.kill(); }
+  }
+});
+
 await test("term parsing reaches all six quarters", async () => {
   const src = await import("node:fs").then((fs) => fs.promises.readFile("anteater-mcp.mjs", "utf8"));
   const block = src.slice(src.indexOf("const QUARTERS = "), src.indexOf("let _deptCache"));

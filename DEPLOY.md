@@ -197,6 +197,31 @@ Two more things that are not requirements but you want them: **keep the URI out 
 logs**, since the token may be in it, and let the proxy hold the certificate so the server
 never sees one.
 
+### Seeing the real client address
+
+A proxied request arrives from the proxy, so by default the log records the proxy — inside
+Docker that is the bridge gateway, typically `172.x.x.x`, for every request. The client is
+in `X-Forwarded-For`, but that header is set by whoever sent the request, so the server
+ignores it until you name the peers allowed to set it:
+
+```bash
+# in .env, alongside the token
+ANTEATER_TRUSTED_PROXIES=private       # covers the Docker bridge and the RFC1918 ranges
+```
+
+Use `loopback` when the server runs directly on the host, or list exact CIDRs
+(`172.21.0.0/16,10.8.0.0/24`) to be strict. With it set, the log reports the real client as
+`remote` and keeps the proxy as `via`, and the generated `/openapi.json` picks up the
+external hostname from `X-Forwarded-Host` instead of reporting `localhost`.
+
+Make sure the proxy actually sends the headers — the nginx block above sets
+`X-Forwarded-Proto`; add the client address too:
+
+```nginx
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+```
+
 <details open><summary><b>nginx</b></summary>
 
 ```nginx

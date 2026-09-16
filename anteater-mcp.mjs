@@ -30,6 +30,7 @@
 
 import http from "node:http";
 import { timingSafeEqual } from "node:crypto";
+import net from "node:net";
 import process from "node:process";
 
 const BASE = process.env.ANTEATER_API_BASE || "https://anteaterapi.com";
@@ -3002,10 +3003,107 @@ const toolByName = new Map(TOOLS.map((t) => [t.name, t]));
  * routes and the OpenAPI document from the definitions the MCP side already uses.
  */
 
+/**
+ * Which direct peers we believe when they send X-Forwarded-*. Those headers are
+ * client-supplied, so trusting them unconditionally lets anyone forge their own
+ * address in the log and rewrite the base URL in the generated OpenAPI document.
+ * Empty means trust nothing, which is right when the server is directly exposed.
+ *
+ * Accepts CIDRs, bare addresses, and the shorthands "loopback" and "private".
+ */
+function buildTrustedProxies(spec) {
+  const entries = String(spec || "").split(",").map((x) => x.trim()).filter(Boolean);
+  if (!entries.length) return null;
+
+  const list = new net.BlockList();
+  const addLoopback = () => { list.addSubnet("127.0.0.0", 8, "ipv4"); list.addAddress("::1", "ipv6"); };
+  for (const entry of entries) {
+    const token = entry.toLowerCase();
+    if (token === "loopback") { addLoopback(); continue; }
+    if (token === "private") {
+      // Covers the Docker bridge, which is what a container behind a reverse proxy sees.
+      list.addSubnet("10.0.0.0", 8, "ipv4");
+      list.addSubnet("172.16.0.0", 12, "ipv4");
+      list.addSubnet("192.168.0.0", 16, "ipv4");
+      list.addSubnet("fc00::", 7, "ipv6");
+      addLoopback();
+      continue;
+    }
+    const [addr, bits] = entry.split("/");
+    const family = net.isIPv6(addr) ? "ipv6" : net.isIPv4(addr) ? "ipv4" : null;
+    if (!family) {
+      process.stderr.write(`anteater-mcp: ignoring unparseable ANTEATER_TRUSTED_PROXIES entry "${entry}"\n`);
+      continue;
+    }
+    try {
+      if (bits === undefined) list.addAddress(addr, family);
+      else list.addSubnet(addr, Number(bits), family);
+    } catch (e) {
+      process.stderr.write(`anteater-mcp: ignoring invalid ANTEATER_TRUSTED_PROXIES entry "${entry}" (${e.message})\n`);
+    }
+  }
+  return list;
+}
+
+const TRUSTED_PROXIES = buildTrustedProxies(process.env.ANTEATER_TRUSTED_PROXIES);
+
+// Behind a reverse proxy with no trust configured, every request looks like it came
+// from the proxy. That is a confusing symptom, so say once what causes it.
+let warnedAboutForwarding = false;
+function warnUntrustedForwarding(req) {
+  if (warnedAboutForwarding || TRUSTED_PROXIES) return;
+  if (!req.headers["x-forwarded-for"] && !req.headers["x-real-ip"]) return;
+  warnedAboutForwarding = true;
+  process.stderr.write(
+    `anteater-mcp: requests carry X-Forwarded-For but ANTEATER_TRUSTED_PROXIES is unset, so the ` +
+      `header is ignored and "remote" is the proxy, not the client. Set it to the proxy's address ` +
+      `to change that — "private" covers the Docker bridge. It is ignored by default because the ` +
+      `header is client-supplied and would otherwise be forgeable.\n`,
+  );
+}
+
+/** IPv4-mapped IPv6 ("::ffff:10.0.0.1") is the same host as the bare IPv4 form. */
+const normalizeIp = (a) => String(a || "").trim().replace(/^::ffff:/i, "");
+
+function isTrustedProxy(addr) {
+  if (!TRUSTED_PROXIES || !addr) return false;
+  const family = net.isIPv6(addr) ? "ipv6" : net.isIPv4(addr) ? "ipv4" : null;
+  if (!family) return false;
+  try {
+    return TRUSTED_PROXIES.check(addr, family);
+  } catch {
+    return false;
+  }
+}
+
+/** True when this request arrived through a proxy we configured ourselves. */
+const viaTrustedProxy = (req) => isTrustedProxy(normalizeIp(req.socket.remoteAddress));
+
+/**
+ * The originating client, or the direct peer when there is no reason to believe
+ * otherwise. Walks X-Forwarded-For from the right and returns the first address that
+ * is not itself one of our proxies, which is correct for both common nginx idioms
+ * and for several chained hops.
+ */
+function clientAddress(req) {
+  const peer = normalizeIp(req.socket.remoteAddress) || "unknown";
+  if (!viaTrustedProxy(req)) return peer;
+
+  const chain = String(req.headers["x-forwarded-for"] || "").split(",").map(normalizeIp).filter(Boolean);
+  for (let i = chain.length - 1; i >= 0; i--) {
+    if (net.isIP(chain[i]) && !isTrustedProxy(chain[i])) return chain[i];
+  }
+  const real = normalizeIp(req.headers["x-real-ip"]);
+  if (net.isIP(real)) return real;
+  return peer;
+}
+
 /** Absolute base URL of this server as the caller reached it, for `servers`. */
 function publicBaseUrl(req) {
-  const proto = (req.headers["x-forwarded-proto"] || "").split(",")[0].trim() || "http";
-  const host = (req.headers["x-forwarded-host"] || req.headers.host || "localhost").split(",")[0].trim();
+  const trusted = viaTrustedProxy(req);
+  const proto = (trusted ? (req.headers["x-forwarded-proto"] || "") : "").split(",")[0].trim() || "http";
+  const host = ((trusted ? req.headers["x-forwarded-host"] : "") || req.headers.host || "localhost")
+    .split(",")[0].trim();
   return `${proto}://${host}`;
 }
 
@@ -3322,11 +3420,13 @@ function runHttp(port, host) {
     };
     res.once("finish", () => logResponse(false));
     res.once("close", () => logResponse(true));
+    warnUntrustedForwarding(req);
     httpLog("http.request", {
       requestId,
       method: req.method,
       target: safeRequestTarget(req.url),
-      remote: req.socket.remoteAddress || "unknown",
+      remote: clientAddress(req),
+      ...(viaTrustedProxy(req) ? { via: normalizeIp(req.socket.remoteAddress) } : {}),
       ...(req.headers["user-agent"] ? { userAgent: String(req.headers["user-agent"]).slice(0, 200) } : {}),
     });
 

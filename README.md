@@ -364,6 +364,7 @@ set -a; . ./.env; set +a # load it without echoing the value
 | `ANTEATER_API_BASE` | Defaults to `https://anteaterapi.com`. Point at a self-hosted instance. |
 | `ANTEATER_MCP_TOKEN` | HTTP mode only, and **required before you expose the server**. Clients send `Authorization: Bearer <token>`, which is preferred, or use `https://host/mcp?token=<token>` where the client accepts only a URL. Any token in a URL can land in browser history, connector settings, and proxy logs. `/health` stays open. Unset means no authentication, which is only safe on loopback. |
 | `ANTEATER_ALLOWED_ORIGINS` | HTTP mode only. Comma-separated extra origins to allow. |
+| `ANTEATER_TRUSTED_PROXIES` | HTTP mode only. Which direct peers may set `X-Forwarded-*`. Accepts CIDRs, bare addresses, and the shorthands `private` and `loopback`. **Unset means the headers are ignored**, because they are client-supplied and would otherwise let anyone forge their address in your log. Behind a reverse proxy set this, or every request looks like it came from the proxy. `private` covers the Docker bridge. |
 | `HOST` / `PORT` | HTTP mode only; equivalent to `--host` / `--port`. |
 
 ### Command line
