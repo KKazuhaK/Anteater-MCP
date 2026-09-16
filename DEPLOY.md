@@ -317,6 +317,26 @@ show up alongside the tools. Try:
 
 > *"What GE-2 courses are still open for Fall that end before 5pm, and which grades best?"*
 
+### The same endpoint from ChatGPT and Codex
+
+One deployment serves all three. Only the dialog differs.
+
+**ChatGPT** — Settings → Connectors → create, or the New Plugin dialog:
+
+```
+Server URL:     https://mcp.example.com/mcp
+Authentication: Access token / API key
+Header scheme:  Bearer
+Token:          <your token>
+```
+
+**Codex** — reads the token from the environment, so it never reaches a config file:
+
+```bash
+export ANTEATER_MCP_TOKEN=...
+codex mcp add anteater --url https://mcp.example.com/mcp --bearer-token-env-var ANTEATER_MCP_TOKEN
+```
+
 ## 7. Keeping it current
 
 ```bash

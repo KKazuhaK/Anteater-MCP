@@ -194,7 +194,7 @@ the Claude one, only the connector UI differs.
 | | Custom GPT + Actions | Developer mode + MCP |
 |---|---|---|
 | Server needed | No | Yes, public HTTPS |
-| Auth options | None · API Key (Basic/Bearer/**custom header**) · OAuth | OAuth · none · mixed. Developer mode documents no header field, so use `?token=`; Claude's own connector dialog *does* take request headers |
+| Auth options | None · API Key (Basic/Bearer/**custom header**) · OAuth | Access token / API key with a **Bearer, Basic or custom header** scheme · OAuth · none. Claude's connector dialog takes request headers too, so `?token=` is only a fallback |
 | Can carry your Anteater key | Yes, API Key → Bearer | Yes, server-side via `ANTEATER_API_KEY` |
 | What the model gets | 12 raw API operations, JSON | All 17 tools, formatted, plus 6 prompts and 4 resources |
 | Prerequisite / conflict checking | No — the model must reason it out | Yes |
@@ -208,6 +208,27 @@ server from the phone itself. [DEPLOY.md](DEPLOY.md) has a complete recipe: toke
 a systemd unit, Caddy or nginx, and the connector setup.
 
 The [ChatGPT Custom GPT route](#chatgpt) also works on mobile and needs no server at all.
+
+### Codex
+
+Codex speaks streamable HTTP and reads the token from an environment variable, so it
+never lands in a config file:
+
+```bash
+export ANTEATER_MCP_TOKEN=...   # in your shell profile
+codex mcp add anteater --url https://your.domain/mcp --bearer-token-env-var ANTEATER_MCP_TOKEN
+```
+
+Or write it to `~/.codex/config.toml` directly — a project-local `.codex/config.toml`
+takes precedence over the global one:
+
+```toml
+[mcp_servers.anteater]
+url = "https://your.domain/mcp"
+bearer_token_env_var = "ANTEATER_MCP_TOKEN"
+```
+
+Codex reads the variable at connect time and sends `Authorization: Bearer <token>`.
 
 ### Any other MCP client
 
