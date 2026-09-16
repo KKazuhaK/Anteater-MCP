@@ -106,7 +106,13 @@ Two routes. **The first needs no server.**
 1. ChatGPT → **Explore GPTs → Create → Configure → Create new action**
 2. Paste the contents of [`gpt-actions-openapi.json`](gpt-actions-openapi.json) into the
    Schema box
-3. Authentication: **None** (Anteater API is readable anonymously)
+3. **Authentication** — two workable choices:
+   - **None.** Anteater API is readable anonymously. Simplest, but you share a global
+     hourly quota with every other anonymous caller and will hit 429s.
+   - **API Key → Auth Type: Bearer**, with your Anteater API key. ChatGPT then sends
+     `Authorization: Bearer <key>` on every call and you get your own quota. ⚠️ The key is
+     stored with the GPT, so **anyone you share the GPT with uses your key**. Fine for a
+     private GPT; do not publish one with your key in it.
 4. Paste [`gpt-instructions.md`](gpt-instructions.md) into the Instructions box
 
 The GPT calls `anteaterapi.com` directly. Twelve operations cover courses, WebSoc,
@@ -128,13 +134,34 @@ node anteater-mcp.mjs --http --port 8787   # binds 127.0.0.1 only — do not add
 ngrok http 8787      # or: cloudflared tunnel --url http://localhost:8787
 ```
 
-Add `https://<your-tunnel-domain>/mcp` under **Settings → Connectors → Advanced →
-Developer mode**. All 16 tools work, including prerequisite checking and conflict
-detection.
+Add the URL under **Settings → Connectors → Advanced → Developer mode**. All 17 tools
+work, including prerequisite checking and conflict detection.
 
-> ⚠️ The endpoint has no authentication. Run it behind a temporary tunnel and shut it
-> down afterwards. See [HTTP mode security](#http-mode-security).
+ChatGPT's developer mode supports **OAuth, no authentication, or mixed** — there is no
+field for a custom header, so use the path form of the token, exactly as with Claude:
+
+```
+https://<your-domain>/<ANTEATER_MCP_TOKEN>/mcp
+```
+
+Both transports ChatGPT accepts, SSE and streaming HTTP, are implemented. For a permanent
+deployment rather than a tunnel, follow [DEPLOY.md](DEPLOY.md) — the setup is identical to
+the Claude one, only the connector UI differs.
+
+> ⚠️ Without `ANTEATER_MCP_TOKEN` the endpoint is unauthenticated. Set it before exposing
+> anything. See [HTTP mode security](#http-mode-security).
 </details>
+
+### Which ChatGPT route gets you what
+
+| | Custom GPT + Actions | Developer mode + MCP |
+|---|---|---|
+| Server needed | No | Yes, public HTTPS |
+| Auth options | None · API Key (Basic/Bearer/**custom header**) · OAuth | OAuth · none · mixed — **no custom header**, so use the path token |
+| Can carry your Anteater key | Yes, API Key → Bearer | Yes, server-side via `ANTEATER_API_KEY` |
+| What the model gets | 12 raw API operations, JSON | All 17 tools, formatted, plus 6 prompts and 4 resources |
+| Prerequisite / conflict checking | No — the model must reason it out | Yes |
+| Works on mobile | Yes | Yes |
 
 ### On your phone
 
