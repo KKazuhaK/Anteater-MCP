@@ -85,8 +85,16 @@ jobs:
           if (version !== 'anteater-mcp ${{ needs.validate.outputs.version }}') {
             throw new Error(`unexpected version: ${version}`);
           }
-          const tools = execFileSync(binary, ['--list-tools'], { encoding: 'utf8' });
-          if (!tools.includes('find_sections')) throw new Error('standalone binary did not list tools');
+          // Compare against the source rather than a hardcoded tool name: this asserted
+          // one specific name and broke the release when that tool was renamed.
+          const fromBinary = execFileSync(binary, ['--list-tools'], { encoding: 'utf8' }).trim();
+          const fromSource = execFileSync(process.execPath, ['anteater-mcp.mjs', '--list-tools'], { encoding: 'utf8' }).trim();
+          if (fromBinary !== fromSource) {
+            throw new Error(`binary lists different tools than the source:\n${fromBinary}\n---\n${fromSource}`);
+          }
+          if (fromBinary.split('\n').filter(Boolean).length < 10) {
+            throw new Error(`binary listed too few tools:\n${fromBinary}`);
+          }
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: anteater-mcp-${{ matrix.os }}-${{ matrix.arch }}
