@@ -1,0 +1,65 @@
+import { spawn } from "node:child_process";
+
+const CALLS = [
+  ["initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } }],
+  ["tools/list", {}],
+  ["tools/call", { name: "list_terms", arguments: { term: "2026 Fall" } }],
+  ["tools/call", { name: "list_departments", arguments: { filter: "computer" } }],
+  ["tools/call", { name: "search_courses", arguments: { query: "machine learning", limit: 6 } }],
+  ["tools/call", { name: "search_courses", arguments: { department: "cs", courseLevel: "UpperDiv", limit: 5 } }],
+  ["tools/call", { name: "get_course", arguments: { courseId: "cs 161" } }],
+  ["tools/call", { name: "find_sections", arguments: { term: "2026 Fall", department: "CS", courseNumber: "161" } }],
+  ["tools/call", { name: "find_sections", arguments: { term: "Fall 2026", ge: "GE-2", days: "TuTh", startAfter: "10am", availability: "OpenOnly", limit: 12 } }],
+  ["tools/call", { name: "course_grades", arguments: { courseId: "COMPSCI 161" } }],
+  ["tools/call", { name: "course_grades", arguments: { courseId: "COMPSCI 161", groupBy: "term" } }],
+  ["tools/call", { name: "instructor_info", arguments: { name: "Shindler" } }],
+  ["tools/call", { name: "enrollment_history", arguments: { courseId: "COMPSCI 161" } }],
+  ["tools/call", { name: "check_prerequisites", arguments: { courseId: "CS 161", completed: ["I&C SCI 46:B+", "I&C SCI 6B:A", "I&C SCI 6D:A-"], apScores: { "AP CALCULUS BC": 5 } } }],
+  ["tools/call", { name: "check_prerequisites", arguments: { courseId: "CS 161", completed: ["I&C SCI 6B"] } }],
+  ["tools/call", { name: "check_schedule", arguments: { term: "2026 Fall", sectionCodes: ["34190", "34191"] } }],
+  ["tools/call", { name: "recommend_courses", arguments: { term: "2026 Fall", ge: "GE-2", endBefore: "5pm", limit: 10 } }],
+  ["tools/call", { name: "list_programs", arguments: { filter: "computer" } }],
+  ["tools/call", { name: "get_program_requirements", arguments: { programId: "BS-201" } }],
+  // regressions for the pre-publication review findings
+  ["tools/call", { name: "find_sections", arguments: { term: "2026 Summer 1", department: "CS" } }],          // parseTerm: was silently Spring
+  ["tools/call", { name: "check_schedule", arguments: { term: "2026 Fall", sectionCodes: ["40250", "40364"] } }], // units: standalone lab was dropped; final exam month
+  ["tools/call", { name: "find_sections", arguments: { term: "2026 Fall", department: "I&C SCI", courseNumber: "51" } }], // spaced dept code in timetable
+  ["tools/call", { name: "recommend_courses", arguments: { term: "2026 Fall", ge: "GE-1A", limit: 5 } }],      // was empty: seminar-only GE hidden by sectionType Lec
+  ["tools/call", { name: "list_departments", arguments: { filter: "CS" } }],                                   // alias fallback
+  ["tools/call", { name: "get_program_requirements", arguments: { kind: "ugrad", block: "GE" } }],              // was always failing: missing id
+  // error paths
+  ["tools/call", { name: "find_sections", arguments: { term: "2026 Fall" } }],
+  ["tools/call", { name: "get_course", arguments: { courseId: "NOPE 999" } }],
+  ["tools/call", { name: "list_terms", arguments: { term: "sometime" } }],
+  ["tools/call", { name: "nonexistent_tool", arguments: {} }],
+];
+
+const only = process.argv[2] ? Number(process.argv[2]) : null;
+const p = spawn("node", ["anteater-mcp.mjs"], { stdio: ["pipe", "pipe", "inherit"] });
+let buf = "";
+let n = 0;
+const wanted = only !== null ? [CALLS[0], CALLS[only]] : CALLS;
+
+p.stdout.on("data", (d) => {
+  buf += d;
+  let i;
+  while ((i = buf.indexOf("\n")) !== -1) {
+    const line = buf.slice(0, i); buf = buf.slice(i + 1);
+    if (!line.trim()) continue;
+    const r = JSON.parse(line);
+    const call = wanted[n];
+    n++;
+    const label = call[1]?.name ? `${call[0]}:${call[1].name}` : call[0];
+    if (r.error) console.log(`\n### ${label}\nRPC ERROR: ${JSON.stringify(r.error)}`);
+    else if (r.result?.content) {
+      const t = r.result.content[0].text;
+      console.log(`\n### ${label}${r.result.isError ? "  [isError]" : ""}\n${t.length > 2200 ? t.slice(0, 2200) + `\n…[${t.length} chars total]` : t}`);
+    } else if (call[0] === "tools/list") console.log(`\n### tools/list -> ${r.result.tools.length} tools, schemas ok: ${r.result.tools.every((x) => x.inputSchema?.type === "object")}`);
+    else console.log(`\n### ${label} -> ${JSON.stringify(r.result).slice(0, 200)}`);
+    if (n >= wanted.length) { p.stdin.end(); setTimeout(() => process.exit(0), 100); }
+  }
+});
+
+for (const [method, params] of wanted) {
+  p.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: Math.random(), method, params }) + "\n");
+}

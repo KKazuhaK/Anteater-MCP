@@ -1,0 +1,46 @@
+{
+  "name": "anteater-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for UCI course search and registration planning, backed by Anteater API. Live section availability, grade distributions by professor, enrollment history, prerequisite checking and schedule conflict detection.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "uci",
+    "anteater-api",
+    "course-registration",
+    "websoc",
+    "claude",
+    "chatgpt"
+  ],
+  "homepage": "https://github.com/KKazuhaK/anteater-mcp#readme",
+  "bugs": "https://github.com/KKazuhaK/anteater-mcp/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KKazuhaK/anteater-mcp.git"
+  },
+  "license": "AGPL-3.0-or-later",
+  "author": "Kazuha Mo",
+  "type": "module",
+  "main": "anteater-mcp.mjs",
+  "bin": {
+    "anteater-mcp": "anteater-mcp.mjs"
+  },
+  "files": [
+    "anteater-mcp.mjs",
+    "gpt-actions-openapi.json",
+    "gpt-instructions.md",
+    "claude_desktop_config.example.json",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node anteater-mcp.mjs",
+    "start:http": "node anteater-mcp.mjs --http",
+    "tools": "node anteater-mcp.mjs --list-tools",
+    "test": "node test.mjs"
+  }
+}

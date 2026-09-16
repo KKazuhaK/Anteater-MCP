@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "anteater": {
+      "command": "node",
+      "args": ["/ABSOLUTE/PATH/TO/anteater-mcp/anteater-mcp.mjs"],
+      "env": {
+        "ANTEATER_API_KEY": ""
+      }
+    }
+  }
+}

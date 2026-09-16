@@ -1,0 +1,49 @@
+anteater-mcp
+Copyright (C) 2026 Kazuha Mo
+
+This program is free software licensed under the GNU Affero General Public
+License, version 3 or later. See LICENSE for the full text.
+
+
+Relationship to Anteater API
+----------------------------
+This project is an independent HTTP client of the Anteater API instance hosted at
+https://anteaterapi.com by ICS Student Council (ICSSC). It contains no source code
+from the icssc/anteater-api repository.
+
+It is licensed under AGPL-3.0-or-later by choice, matching the licence of the
+upstream Anteater API server, so that code can move freely in either direction if
+this work is ever contributed upstream.
+
+This project is not affiliated with, endorsed by, or an official tool of ICSSC or
+the University of California, Irvine.
+
+
+Network use (AGPL section 13)
+-----------------------------
+This program can run as a network service (`anteater-mcp.mjs --http`). If you modify
+it and let users interact with it remotely, section 13 of the AGPL requires you to
+offer those users the Corresponding Source of your modified version.
+
+To help you comply, the server advertises its own source location: the /health
+endpoint reports it and /source redirects to it. If you deploy a fork, change the
+SOURCE_URL constant in anteater-mcp.mjs to point at your repository.
+
+
+Attribution
+-----------
+Course data is retrieved at runtime from Anteater API and remains subject to their
+attribution policy:
+https://docs.icssc.club/docs/developer/anteaterapi/attribution-policy
+
+Data from Anteater API (https://icssc.link/about-anteaterapi), maintained by ICSSC
+Projects.
+
+For academic use, cite:
+
+    @misc{anteater-api,
+      author = {ICS Student Council},
+      title = {Anteater API},
+      year = {2024},
+      howpublished = {\url{https://github.com/icssc/anteater-api}},
+    }

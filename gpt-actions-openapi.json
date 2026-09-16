@@ -1,0 +1,1261 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "UCI Anteater API - course search",
+    "description": "Public UC Irvine course data: catalogue, live schedule of classes (WebSoc), historical grade distributions, enrollment history and degree requirements. Provided by Anteater API (ICSSC Projects). Unofficial - always tell the student to confirm on WebReg before registering.",
+    "version": "2.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://anteaterapi.com"
+    }
+  ],
+  "paths": {
+    "/v2/rest/websoc": {
+      "get": {
+        "operationId": "findSections",
+        "summary": "Query WebSoc",
+        "description": "Search UCI's schedule of classes for one term. Returns sections nested as schools > departments > courses > sections, each with meeting times, instructor, enrolled/capacity, waitlist and final exam. ALWAYS pass at least one narrowing filter besides year/quarter (department, courseNumber, ge, instructorName or sectionCodes) - a bare term returns tens of thousands of sections and will be truncated.",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": true,
+            "description": "Four-digit year, e.g. \"2026\".",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "quarter",
+            "in": "query",
+            "required": true,
+            "description": "quarter",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "Fall",
+                "Winter",
+                "Spring",
+                "Summer1",
+                "Summer10wk",
+                "Summer2"
+              ]
+            }
+          },
+          {
+            "name": "ge",
+            "in": "query",
+            "required": false,
+            "description": "ge",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ANY",
+                "GE-1A",
+                "GE-1B",
+                "GE-2",
+                "GE-3",
+                "GE-4",
+                "GE-5A",
+                "GE-5B",
+                "GE-6",
+                "GE-7",
+                "GE-8"
+              ]
+            }
+          },
+          {
+            "name": "department",
+            "in": "query",
+            "required": false,
+            "description": "Exact WebSoc department code, e.g. \"COMPSCI\", \"I&C SCI\", \"BIO SCI\". Call listDepartments if unsure - \"CS\" is not valid.",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses offered by the specified department code"
+            }
+          },
+          {
+            "name": "courseTitle",
+            "in": "query",
+            "required": false,
+            "description": "Only include courses with the specified course title",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses with the specified course title"
+            }
+          },
+          {
+            "name": "courseNumber",
+            "in": "query",
+            "required": false,
+            "description": "Only include courses with the specified course number",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses with the specified course number"
+            }
+          },
+          {
+            "name": "courseId",
+            "in": "query",
+            "required": false,
+            "description": "Only include courses with the specified course ID",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses with the specified course ID"
+            }
+          },
+          {
+            "name": "sectionCodes",
+            "in": "query",
+            "required": false,
+            "description": "A comma-separated list of section codes or section code ranges",
+            "schema": {
+              "type": "string",
+              "description": "A comma-separated list of section codes or section code ranges"
+            }
+          },
+          {
+            "name": "instructorName",
+            "in": "query",
+            "required": false,
+            "description": "Only include courses taught by the specified instructor (case-insensitive)",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses taught by the specified instructor (case-insensitive)"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated day tokens, e.g. \"Tu,Th\" or \"M,W,F\". NOT \"TuTh\" - that is rejected.",
+            "schema": {
+              "type": "string",
+              "description": "Only include sections which meet on at least one of the specified days of the week"
+            }
+          },
+          {
+            "name": "building",
+            "in": "query",
+            "required": false,
+            "description": "Only include sections which have at least one meeting in the specified building",
+            "schema": {
+              "type": "string",
+              "description": "Only include sections which have at least one meeting in the specified building"
+            }
+          },
+          {
+            "name": "room",
+            "in": "query",
+            "required": false,
+            "description": "Only include sections which have at least one meeting in a room with this number",
+            "schema": {
+              "type": "string",
+              "description": "Only include sections which have at least one meeting in a room with this number"
+            }
+          },
+          {
+            "name": "division",
+            "in": "query",
+            "required": false,
+            "description": "division",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "LowerDiv",
+                "UpperDiv",
+                "Graduate",
+                "ANY"
+              ]
+            }
+          },
+          {
+            "name": "sectionType",
+            "in": "query",
+            "required": false,
+            "description": "sectionType",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ANY",
+                "Act",
+                "Col",
+                "Dis",
+                "Fld",
+                "Lab",
+                "Lec",
+                "Qiz",
+                "Res",
+                "Sem",
+                "Stu",
+                "Tap",
+                "Tut"
+              ]
+            }
+          },
+          {
+            "name": "fullCourses",
+            "in": "query",
+            "required": false,
+            "description": "fullCourses",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ANY",
+                "SkipFull",
+                "SkipFullWaitlist",
+                "FullOnly",
+                "Overenrolled"
+              ]
+            }
+          },
+          {
+            "name": "cancelledCourses",
+            "in": "query",
+            "required": false,
+            "description": "cancelledCourses",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "Exclude",
+                "Include",
+                "Only"
+              ]
+            }
+          },
+          {
+            "name": "units",
+            "in": "query",
+            "required": false,
+            "description": "units",
+            "schema": {
+              "type": "string",
+              "description": "One of: VAR"
+            }
+          },
+          {
+            "name": "startTime",
+            "in": "query",
+            "required": false,
+            "description": "Only sections starting at or AFTER this time. 24h or 12h, e.g. \"10:00\" or \"10am\".",
+            "schema": {
+              "type": "string",
+              "description": "Time string in 12 or 24 hour format"
+            }
+          },
+          {
+            "name": "endTime",
+            "in": "query",
+            "required": false,
+            "description": "Only sections ending at or BEFORE this time, e.g. \"17:00\" or \"5pm\".",
+            "schema": {
+              "type": "string",
+              "description": "Time string in 12 or 24 hour format"
+            }
+          },
+          {
+            "name": "excludeRestrictionCodes",
+            "in": "query",
+            "required": false,
+            "description": "excludeRestrictionCodes",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeRelatedCourses",
+            "in": "query",
+            "required": false,
+            "description": "Returns all sections from courses that contain at least one section matching your filters, even if those additional sections don't meet your existing filter criteria.",
+            "schema": {
+              "type": "string",
+              "description": "Returns all sections from courses that contain at least one section matching your filters, even if those additional sections don't meet your existing filter criteria."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The payload is under the `data` key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "Result payload; shape varies by endpoint."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/rest/websoc/terms": {
+      "get": {
+        "operationId": "listTerms",
+        "summary": "List available WebSoc terms",
+        "description": "List the terms (quarters) that have schedule data, newest first. Call this when the user says 'next quarter' without naming one.",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. The payload is under the `data` key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "Result payload; shape varies by endpoint."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/rest/websoc/departments": {
+      "get": {
+        "operationId": "listDepartments",
+        "summary": "List existing WebSoc departments",
+        "description": "List valid department codes (COMPSCI, I&C SCI, BIO SCI ...). Use when unsure of the exact code; 'CS' is NOT valid, 'COMPSCI' is.",
+        "parameters": [
+          {
+            "name": "sinceYear",
+            "in": "query",
+            "required": false,
+            "description": "If provided, filter to departments which have appeared at least once during or after this year",
+            "schema": {
+              "type": "string",
+              "description": "If provided, filter to departments which have appeared at least once during or after this year"
+            }
+          },
+          {
+            "name": "sinceQuarter",
+            "in": "query",
+            "required": false,
+            "description": "If provided with `sinceYear`, departments must have appeared during or after this quarter in that year",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "Fall",
+                "Winter",
+                "Spring",
+                "Summer1",
+                "Summer10wk",
+                "Summer2"
+              ],
+              "description": "If provided with `sinceYear`, departments must have appeared during or after this quarter in that year"
+            }
+          },
+          {
+            "name": "untilYear",
+            "in": "query",
+            "required": false,
+            "description": "If provided, filter to departments which have appeared at least once before or during this year",
+            "schema": {
+              "type": "string",
+              "description": "If provided, filter to departments which have appeared at least once before or during this year"
+            }
+          },
+          {
+            "name": "untilQuarter",
+            "in": "query",
+            "required": false,
+            "description": "If provided with `untilYear`, departments must have appeared before or during this quarter in that year",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "Fall",
+                "Winter",
+                "Spring",
+                "Summer1",
+                "Summer10wk",
+                "Summer2"
+              ],
+              "description": "If provided with `untilYear`, departments must have appeared before or during this quarter in that year"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The payload is under the `data` key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "Result payload; shape varies by endpoint."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/rest/courses": {
+      "get": {
+        "operationId": "filterCourses",
+        "summary": "Filter courses",
+        "description": "Browse the course catalogue by department, GE category, level, units or title/description substring. Not term-specific.",
+        "parameters": [
+          {
+            "name": "department",
+            "in": "query",
+            "required": false,
+            "description": "Exact WebSoc department code, e.g. \"COMPSCI\", \"I&C SCI\", \"BIO SCI\". Call listDepartments if unsure - \"CS\" is not valid.",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses offered by the specified department code"
+            }
+          },
+          {
+            "name": "courseNumber",
+            "in": "query",
+            "required": false,
+            "description": "Only include courses exactly matching the specified course number",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses exactly matching the specified course number"
+            }
+          },
+          {
+            "name": "courseNumeric",
+            "in": "query",
+            "required": false,
+            "description": "Only include courses whose course number has a leading integer equal to the specified value (e.g., 45 matches 45C, but not 4 or 5C)",
+            "schema": {
+              "type": "number",
+              "description": "Only include courses whose course number has a leading integer equal to the specified value (e.g., 45 matches 45C, but not 4 or 5C)"
+            }
+          },
+          {
+            "name": "titleContains",
+            "in": "query",
+            "required": false,
+            "description": "A substring to search for in course title(s) (case-insensitive)",
+            "schema": {
+              "type": "string",
+              "description": "A substring to search for in course title(s) (case-insensitive)"
+            }
+          },
+          {
+            "name": "courseLevel",
+            "in": "query",
+            "required": false,
+            "description": "courseLevel",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "LowerDiv",
+                "UpperDiv",
+                "Graduate"
+              ]
+            }
+          },
+          {
+            "name": "minUnits",
+            "in": "query",
+            "required": false,
+            "description": "If provided, only courses with at least this number of units are included in the results",
+            "schema": {
+              "type": "number",
+              "description": "If provided, only courses with at least this number of units are included in the results"
+            }
+          },
+          {
+            "name": "maxUnits",
+            "in": "query",
+            "required": false,
+            "description": "If provided, only courses with at most this number of units are included in the results",
+            "schema": {
+              "type": "number",
+              "description": "If provided, only courses with at most this number of units are included in the results"
+            }
+          },
+          {
+            "name": "descriptionContains",
+            "in": "query",
+            "required": false,
+            "description": "A substring to search for in course description(s) (case-insensitive)",
+            "schema": {
+              "type": "string",
+              "description": "A substring to search for in course description(s) (case-insensitive)"
+            }
+          },
+          {
+            "name": "geCategory",
+            "in": "query",
+            "required": false,
+            "description": "geCategory",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "GE-1A",
+                "GE-1B",
+                "GE-2",
+                "GE-3",
+                "GE-4",
+                "GE-5A",
+                "GE-5B",
+                "GE-6",
+                "GE-7",
+                "GE-8"
+              ]
+            }
+          },
+          {
+            "name": "take",
+            "in": "query",
+            "required": false,
+            "description": "Limits the number of results to return. Use with 'skip' for pagination: 'skip' specifies how many results to skip before returning 'take' results",
+            "schema": {
+              "type": "number",
+              "description": "Limits the number of results to return. Use with 'skip' for pagination: 'skip' specifies how many results to skip before returning 'take' results"
+            }
+          },
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "description": "Skip this many results before beginning to return results. Use with 'take' for pagination: 'skip' specifies how many results to skip before returning 'take' results",
+            "schema": {
+              "type": "number",
+              "description": "Skip this many results before beginning to return results. Use with 'take' for pagination: 'skip' specifies how many results to skip before returning 'take' results"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The payload is under the `data` key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "Result payload; shape varies by endpoint."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/rest/courses/{id}": {
+      "get": {
+        "operationId": "getCourse",
+        "summary": "Retrieve a course",
+        "description": "Full catalogue detail for one course: description, units, prerequisite text and tree, courses it unlocks, enrollment restrictions, GE credit, and terms it has been offered. The id has no spaces, e.g. COMPSCI161.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Course id with no spaces, e.g. \"COMPSCI161\", \"I&CSCI46\".",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The payload is under the `data` key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "Result payload; shape varies by endpoint."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/rest/grades/aggregateByOffering": {
+      "get": {
+        "operationId": "gradesByInstructor",
+        "summary": "Retrieve grade aggregate by offering",
+        "description": "Historical grade distribution and average GPA for a course broken down BY INSTRUCTOR. Use to answer 'which professor should I take?'.",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "description": "Four-digit year, e.g. \"2026\".",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "quarter",
+            "in": "query",
+            "required": false,
+            "description": "quarter",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "Fall",
+                "Winter",
+                "Spring",
+                "Summer1",
+                "Summer10wk",
+                "Summer2"
+              ]
+            }
+          },
+          {
+            "name": "instructor",
+            "in": "query",
+            "required": false,
+            "description": "Only include courses taught by the specified instructor (case-insensitive)",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses taught by the specified instructor (case-insensitive)"
+            }
+          },
+          {
+            "name": "department",
+            "in": "query",
+            "required": false,
+            "description": "Exact WebSoc department code, e.g. \"COMPSCI\", \"I&C SCI\", \"BIO SCI\". Call listDepartments if unsure - \"CS\" is not valid.",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses offered by the specified department code"
+            }
+          },
+          {
+            "name": "courseNumber",
+            "in": "query",
+            "required": false,
+            "description": "Only include courses exactly matching the specified course number",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses exactly matching the specified course number"
+            }
+          },
+          {
+            "name": "sectionCode",
+            "in": "query",
+            "required": false,
+            "description": "The 5-digit section code",
+            "schema": {
+              "type": "string",
+              "description": "The 5-digit section code"
+            }
+          },
+          {
+            "name": "division",
+            "in": "query",
+            "required": false,
+            "description": "division",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "LowerDiv",
+                "UpperDiv",
+                "Graduate",
+                "ANY"
+              ]
+            }
+          },
+          {
+            "name": "ge",
+            "in": "query",
+            "required": false,
+            "description": "ge",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "GE-1A",
+                "GE-1B",
+                "GE-2",
+                "GE-3",
+                "GE-4",
+                "GE-5A",
+                "GE-5B",
+                "GE-6",
+                "GE-7",
+                "GE-8",
+                "ANY"
+              ]
+            }
+          },
+          {
+            "name": "excludePNP",
+            "in": "query",
+            "required": false,
+            "description": "If true, excludes courses that are graded only on a Pass/No Pass basis",
+            "schema": {
+              "type": "string",
+              "description": "If true, excludes courses that are graded only on a Pass/No Pass basis"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The payload is under the `data` key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "Result payload; shape varies by endpoint."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/rest/grades/aggregateByCourse": {
+      "get": {
+        "operationId": "gradesByCourse",
+        "summary": "Retrieve grade aggregate by course",
+        "description": "Historical grade distribution and average GPA aggregated PER COURSE. Pass a ge category to compare the difficulty of every course satisfying that GE at once.",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "description": "Four-digit year, e.g. \"2026\".",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "quarter",
+            "in": "query",
+            "required": false,
+            "description": "quarter",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "Fall",
+                "Winter",
+                "Spring",
+                "Summer1",
+                "Summer10wk",
+                "Summer2"
+              ]
+            }
+          },
+          {
+            "name": "instructor",
+            "in": "query",
+            "required": false,
+            "description": "Only include courses taught by the specified instructor (case-insensitive)",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses taught by the specified instructor (case-insensitive)"
+            }
+          },
+          {
+            "name": "department",
+            "in": "query",
+            "required": false,
+            "description": "Exact WebSoc department code, e.g. \"COMPSCI\", \"I&C SCI\", \"BIO SCI\". Call listDepartments if unsure - \"CS\" is not valid.",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses offered by the specified department code"
+            }
+          },
+          {
+            "name": "courseNumber",
+            "in": "query",
+            "required": false,
+            "description": "Only include courses exactly matching the specified course number",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses exactly matching the specified course number"
+            }
+          },
+          {
+            "name": "sectionCode",
+            "in": "query",
+            "required": false,
+            "description": "The 5-digit section code",
+            "schema": {
+              "type": "string",
+              "description": "The 5-digit section code"
+            }
+          },
+          {
+            "name": "division",
+            "in": "query",
+            "required": false,
+            "description": "division",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "LowerDiv",
+                "UpperDiv",
+                "Graduate",
+                "ANY"
+              ]
+            }
+          },
+          {
+            "name": "ge",
+            "in": "query",
+            "required": false,
+            "description": "ge",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "GE-1A",
+                "GE-1B",
+                "GE-2",
+                "GE-3",
+                "GE-4",
+                "GE-5A",
+                "GE-5B",
+                "GE-6",
+                "GE-7",
+                "GE-8",
+                "ANY"
+              ]
+            }
+          },
+          {
+            "name": "excludePNP",
+            "in": "query",
+            "required": false,
+            "description": "If true, excludes courses that are graded only on a Pass/No Pass basis",
+            "schema": {
+              "type": "string",
+              "description": "If true, excludes courses that are graded only on a Pass/No Pass basis"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The payload is under the `data` key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "Result payload; shape varies by endpoint."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/rest/enrollmentHistory": {
+      "get": {
+        "operationId": "enrollmentHistory",
+        "summary": "Filter enrollment history",
+        "description": "Day-by-day enrollment history for past offerings, as parallel arrays (dates, totalEnrolledHistory, maxCapacityHistory, waitlistHistory, requestedHistory, statusHistory). Use to judge how hard a class is to get into.",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "description": "Four-digit year, e.g. \"2026\".",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "quarter",
+            "in": "query",
+            "required": false,
+            "description": "quarter",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "Fall",
+                "Winter",
+                "Spring",
+                "Summer1",
+                "Summer10wk",
+                "Summer2"
+              ]
+            }
+          },
+          {
+            "name": "instructorName",
+            "in": "query",
+            "required": false,
+            "description": "Only include courses taught by the specified instructor (case-insensitive)",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses taught by the specified instructor (case-insensitive)"
+            }
+          },
+          {
+            "name": "department",
+            "in": "query",
+            "required": false,
+            "description": "Exact WebSoc department code, e.g. \"COMPSCI\", \"I&C SCI\", \"BIO SCI\". Call listDepartments if unsure - \"CS\" is not valid.",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses offered by the specified department code"
+            }
+          },
+          {
+            "name": "courseNumber",
+            "in": "query",
+            "required": false,
+            "description": "Only include courses exactly matching the specified course number",
+            "schema": {
+              "type": "string",
+              "description": "Only include courses exactly matching the specified course number"
+            }
+          },
+          {
+            "name": "sectionCode",
+            "in": "query",
+            "required": false,
+            "description": "The 5-digit section code",
+            "schema": {
+              "type": "string",
+              "description": "The 5-digit section code"
+            }
+          },
+          {
+            "name": "sectionType",
+            "in": "query",
+            "required": false,
+            "description": "sectionType",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "Act",
+                "Col",
+                "Dis",
+                "Fld",
+                "Lab",
+                "Lec",
+                "Qiz",
+                "Res",
+                "Sem",
+                "Stu",
+                "Tap",
+                "Tut"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The payload is under the `data` key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "Result payload; shape varies by endpoint."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/rest/instructors": {
+      "get": {
+        "operationId": "findInstructors",
+        "summary": "Filter instructors",
+        "description": "Find instructors by name, title or department substring.",
+        "parameters": [
+          {
+            "name": "nameContains",
+            "in": "query",
+            "required": false,
+            "description": "A substring to search for in instructor name(s) (case-insensitive)",
+            "schema": {
+              "type": "string",
+              "description": "A substring to search for in instructor name(s) (case-insensitive)"
+            }
+          },
+          {
+            "name": "titleContains",
+            "in": "query",
+            "required": false,
+            "description": "A substring to search for in instructor title(s) (case-insensitive)",
+            "schema": {
+              "type": "string",
+              "description": "A substring to search for in instructor title(s) (case-insensitive)"
+            }
+          },
+          {
+            "name": "departmentContains",
+            "in": "query",
+            "required": false,
+            "description": "A substring to search for in instructor department name(s) (case-insensitive)",
+            "schema": {
+              "type": "string",
+              "description": "A substring to search for in instructor department name(s) (case-insensitive)"
+            }
+          },
+          {
+            "name": "take",
+            "in": "query",
+            "required": false,
+            "description": "Limits the number of results to return. Use with 'skip' for pagination: 'skip' specifies how many results to skip before returning 'take' results",
+            "schema": {
+              "type": "number",
+              "description": "Limits the number of results to return. Use with 'skip' for pagination: 'skip' specifies how many results to skip before returning 'take' results"
+            }
+          },
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "description": "Skip this many results before beginning to return results. Use with 'take' for pagination: 'skip' specifies how many results to skip before returning 'take' results",
+            "schema": {
+              "type": "number",
+              "description": "Skip this many results before beginning to return results. Use with 'take' for pagination: 'skip' specifies how many results to skip before returning 'take' results"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The payload is under the `data` key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "Result payload; shape varies by endpoint."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/rest/calendar": {
+      "get": {
+        "operationId": "termCalendar",
+        "summary": "Retrieve term calendar",
+        "description": "Academic calendar for a term: instruction start/end, finals week, enrollment opening date.",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": true,
+            "description": "Four-digit year, e.g. \"2026\".",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "quarter",
+            "in": "query",
+            "required": true,
+            "description": "quarter",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "Fall",
+                "Winter",
+                "Spring",
+                "Summer1",
+                "Summer10wk",
+                "Summer2"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The payload is under the `data` key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "Result payload; shape varies by endpoint."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/rest/programs/majors": {
+      "get": {
+        "operationId": "listMajors",
+        "summary": "Retrieve majors",
+        "description": "List undergraduate majors with their program ids.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": false,
+            "description": "Course id with no spaces, e.g. \"COMPSCI161\", \"I&CSCI46\".",
+            "schema": {
+              "type": "string",
+              "description": "The ID of a single major to request, if provided"
+            }
+          },
+          {
+            "name": "catalogYear",
+            "in": "query",
+            "required": false,
+            "description": "If specified, data is derived from the closest known catalog year (prioritizing more recent years in case of a tie); otherwise, data is from the latest known catalog year",
+            "schema": {
+              "type": "string",
+              "description": "If specified, data is derived from the closest known catalog year (prioritizing more recent years in case of a tie); otherwise, data is from the latest known catalog year"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The payload is under the `data` key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "Result payload; shape varies by endpoint."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/rest/programs/major": {
+      "get": {
+        "operationId": "majorRequirements",
+        "summary": "Retrieve major requirements",
+        "description": "Full degree requirement tree for a major, by program id from listMajors.",
+        "parameters": [
+          {
+            "name": "programId",
+            "in": "query",
+            "required": true,
+            "description": "Program id from listMajors, e.g. \"BS-201\".",
+            "schema": {
+              "type": "string",
+              "description": "A major ID to query requirements for"
+            }
+          },
+          {
+            "name": "specializationId",
+            "in": "query",
+            "required": false,
+            "description": "if provided, fetch major requirements given this specialization; providing no specialization when one is required has unspecified behavior",
+            "schema": {
+              "type": "string",
+              "description": "if provided, fetch major requirements given this specialization; providing no specialization when one is required has unspecified behavior"
+            }
+          },
+          {
+            "name": "catalogYear",
+            "in": "query",
+            "required": false,
+            "description": "If specified, data is derived from the closest known catalog year (prioritizing more recent years in case of a tie); otherwise, data is from an unspecified year",
+            "schema": {
+              "type": "string",
+              "description": "If specified, data is derived from the closest known catalog year (prioritizing more recent years in case of a tie); otherwise, data is from an unspecified year"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The payload is under the `data` key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "Result payload; shape varies by endpoint."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

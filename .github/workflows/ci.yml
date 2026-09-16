@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The README promises Node >= 18, so prove it on the floor and on current.
+        node: ['18', '20', '22', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Syntax check
+        run: node --check anteater-mcp.mjs
+
+      - name: Tools load
+        run: node anteater-mcp.mjs --list-tools
+
+      # Offline only: CI must never draw on Anteater API's public rate limit.
+      - name: Offline conformance tests
+        run: node test-offline.mjs
+
+      - name: No dependencies crept in
+        run: |
+          if [ -d node_modules ]; then echo "node_modules committed"; exit 1; fi
+          node -e "
+            const p = require('./package.json');
+            for (const f of ['dependencies','peerDependencies','optionalDependencies']) {
+              if (p[f] && Object.keys(p[f]).length) { console.error('unexpected ' + f); process.exit(1) }
+            }
+            console.log('zero dependencies confirmed');
+          "
+
+      - name: OpenAPI spec for ChatGPT Actions is well formed
+        run: |
+          node -e "
+            const s = require('./gpt-actions-openapi.json');
+            const ops = Object.values(s.paths).map(p => p.get);
+            if (!s.servers?.[0]?.url) { console.error('missing servers'); process.exit(1) }
+            if (ops.length > 30) { console.error('GPT Actions allows at most 30 operations'); process.exit(1) }
+            const ids = ops.map(o => o.operationId);
+            if (new Set(ids).size !== ids.length) { console.error('duplicate operationId'); process.exit(1) }
+            for (const o of ops)
+              for (const prm of o.parameters || [])
+                if (!prm.schema?.type) { console.error('parameter without schema: ' + o.operationId + '.' + prm.name); process.exit(1) }
+            if (JSON.stringify(s).includes('\$ref')) { console.error('dangling \$ref'); process.exit(1) }
+            console.log(ops.length + ' operations, spec OK');
+          "
