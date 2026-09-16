@@ -321,7 +321,7 @@ show up alongside the tools. Try:
 
 One deployment serves all three. Only the dialog differs.
 
-**ChatGPT** — Settings → Connectors → create, or the New Plugin dialog:
+**ChatGPT on the web** — Settings → Connectors → create, or the New Plugin dialog:
 
 ```
 Server URL:     https://mcp.example.com/mcp
@@ -329,6 +329,23 @@ Authentication: Access token / API key
 Header scheme:  Bearer
 Token:          <your token>
 ```
+
+**ChatGPT on a phone** — MCP plugins are web-only, so the phone needs a Custom GPT
+pointed at the REST facade instead. Fetch the generated document and paste it into the
+Action editor:
+
+```bash
+curl -s -H "Authorization: Bearer <your token>" https://mcp.example.com/openapi.json
+```
+
+In the GPT editor: **Create new action → paste the schema →
+Authentication: API Key → Auth Type: Bearer → paste the token.** The `servers` URL is
+filled in from the request, so it already points at your deployment. All tools are
+available, formatted exactly as the MCP side returns them.
+
+Note that OpenAI is retiring Custom GPTs (Dec 11 2026 for affected workspaces) in favour
+of plugins. When plugins reach mobile, switch back to the MCP endpoint — the server needs
+no change, since both surfaces are generated from the same tool definitions.
 
 **Codex** — reads the token from the environment, so it never reaches a config file:
 

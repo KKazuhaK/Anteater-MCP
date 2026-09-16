@@ -2994,6 +2994,78 @@ async function completeArgument(name, value) {
 
 const toolByName = new Map(TOOLS.map((t) => [t.name, t]));
 
+/* ---- REST facade -------------------------------------------------
+ * ChatGPT's MCP plugins are web-only ("Available to Pro, Plus, Business,
+ * Enterprise, and Education accounts on the web"), so the phone cannot reach this
+ * server over MCP at all. A Custom GPT Action can, and it speaks plain REST.
+ * Rather than maintain a second description of every tool, generate both the
+ * routes and the OpenAPI document from the definitions the MCP side already uses.
+ */
+
+/** Absolute base URL of this server as the caller reached it, for `servers`. */
+function publicBaseUrl(req) {
+  const proto = (req.headers["x-forwarded-proto"] || "").split(",")[0].trim() || "http";
+  const host = (req.headers["x-forwarded-host"] || req.headers.host || "localhost").split(",")[0].trim();
+  return `${proto}://${host}`;
+}
+
+/**
+ * One operation per tool. GPT Actions allows 30; this stays well under.
+ * The tool's own inputSchema becomes the request body, so the two can never
+ * describe different arguments.
+ */
+function buildOpenApi(req) {
+  const paths = {};
+  for (const t of TOOLS) {
+    paths[`/tools/${t.name}`] = {
+      post: {
+        operationId: t.name,
+        summary: t.title,
+        description: t.description,
+        requestBody: {
+          required: Array.isArray(t.inputSchema?.required) && t.inputSchema.required.length > 0,
+          content: { "application/json": { schema: t.inputSchema } },
+        },
+        responses: {
+          200: {
+            description: "The tool's answer, already formatted for reading.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    result: { type: "string", description: "Formatted text. Present it as given; do not re-tabulate." },
+                    isError: { type: "boolean", description: "True when the text explains a failure rather than an answer." },
+                  },
+                  required: ["result"],
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+  }
+
+  return {
+    openapi: "3.1.0",
+    info: {
+      title: "Anteater MCP — UCI course search",
+      description:
+        `${SERVER_INFO.name} ${SERVER_INFO.version}. Course search and registration planning for ` +
+        `UC Irvine. Data from Anteater API (https://icssc.link/about-anteaterapi), maintained by ` +
+        `ICSSC Projects. Unofficial — tell the student to confirm on WebReg before registering.`,
+      version: SERVER_INFO.version,
+    },
+    servers: [{ url: publicBaseUrl(req) }],
+    components: {
+      securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } },
+    },
+    security: MCP_TOKEN ? [{ bearerAuth: [] }] : [],
+    paths,
+  };
+}
+
 async function handleRpc(msg) {
   // A bare `null`, a string, or an array element of null all reach here; destructuring
   // any of them throws inside an async handler, which used to kill the process.
@@ -3328,7 +3400,63 @@ function runHttp(port, host) {
       return res.writeHead(302, { ...CORS, Location: SOURCE_URL }).end();
     }
 
-    if (path !== "/mcp") return res.writeHead(404, CORS).end("Not found. MCP endpoint is /mcp");
+    if (path === "/openapi.json") {
+      return res.writeHead(200, { ...CORS, "Content-Type": "application/json" })
+        .end(JSON.stringify(buildOpenApi(req), null, 2));
+    }
+
+    // REST facade: POST /tools/<name> with the arguments as the JSON body.
+    if (path.startsWith("/tools/")) {
+      const name = decodeURIComponent(path.slice("/tools/".length));
+      const t = toolByName.get(name);
+      if (!t) {
+        return res.writeHead(404, { ...CORS, "Content-Type": "application/json" })
+          .end(JSON.stringify({ error: `Unknown tool "${name}". See /openapi.json for the list.` }));
+      }
+      if (req.method !== "POST") {
+        return res.writeHead(405, { ...CORS, Allow: "POST" }).end();
+      }
+
+      const chunks = [];
+      let size = 0;
+      let aborted = false;
+      req.on("data", (c) => {
+        size += c.length;
+        if (size > 2e6) { aborted = true; res.writeHead(413, CORS).end(); req.destroy(); return; }
+        chunks.push(c);
+      });
+      req.on("end", async () => {
+        if (aborted) return;
+        const raw = Buffer.concat(chunks).toString("utf8").trim();
+        let args;
+        try {
+          args = raw ? JSON.parse(raw) : {};
+        } catch {
+          return res.writeHead(400, { ...CORS, "Content-Type": "application/json" })
+            .end(JSON.stringify({ error: "Request body must be JSON." }));
+        }
+        if (args === null || typeof args !== "object" || Array.isArray(args)) {
+          return res.writeHead(400, { ...CORS, "Content-Type": "application/json" })
+            .end(JSON.stringify({ error: "Request body must be a JSON object of arguments." }));
+        }
+        try {
+          const text = await t.run(args);
+          res.writeHead(200, { ...CORS, "Content-Type": "application/json" })
+            .end(JSON.stringify({ result: String(text) }));
+        } catch (e) {
+          // Mirror the MCP side: a tool failure is an answer about the failure, not
+          // a transport error, so the model can read it and try something else.
+          const message = e instanceof ApiError ? e.message : `${e.name}: ${e.message}`;
+          res.writeHead(200, { ...CORS, "Content-Type": "application/json" })
+            .end(JSON.stringify({ result: `Error: ${message}`, isError: true }));
+        }
+      });
+      return;
+    }
+
+    if (path !== "/mcp") {
+      return res.writeHead(404, CORS).end("Not found. Endpoints are /mcp, /tools/<name>, /openapi.json, /health, /source");
+    }
 
     if (req.method === "GET") {
       // Clients may open an SSE stream for server-initiated messages; we have none.

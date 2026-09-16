@@ -355,6 +355,64 @@ await test("HTTP transport enforces the token when one is set", async () => {
   }
 });
 
+await test("REST facade mirrors the MCP tools and generates a usable OpenAPI document", async () => {
+  const { spawn: sp } = await import("node:child_process");
+  const token = "offline-rest-token-0123456789";
+  const port = 8932;
+  const srv = sp("node", ["anteater-mcp.mjs", "--http", "--port", String(port)], {
+    stdio: ["ignore", "ignore", "ignore"],
+    env: { ...process.env, ANTEATER_MCP_TOKEN: token },
+  });
+  try {
+    for (let i = 0; i < 50; i++) {
+      try { await fetch(`http://127.0.0.1:${port}/health`); break; }
+      catch { await new Promise((r) => setTimeout(r, 100)); }
+    }
+    const auth = { Authorization: `Bearer ${token}` };
+
+    // The document must describe exactly the tools MCP exposes — one source, two surfaces.
+    const spec = await (await fetch(`http://127.0.0.1:${port}/openapi.json`, { headers: auth })).json();
+    const toolNames = (await (await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    })).json()).result.tools.map((t) => t.name).sort();
+    const opIds = Object.values(spec.paths).map((p) => p.post.operationId).sort();
+    assert.deepEqual(opIds, toolNames, "OpenAPI operations drifted from the MCP tool list");
+
+    // Constraints GPT Actions actually enforces.
+    assert.ok(opIds.length <= 30, `GPT Actions allows 30 operations, found ${opIds.length}`);
+    assert.ok(!JSON.stringify(spec).includes("$ref"), "spec must be self-contained");
+    assert.match(spec.servers[0].url, /^https?:\/\//, "servers must be an absolute URL");
+    for (const id of opIds) assert.match(id, /^[A-Za-z0-9_]{1,64}$/, `${id}: invalid operationId`);
+
+    // A tool call over REST returns the same text the MCP side would.
+    const rest = await (await fetch(`http://127.0.0.1:${port}/tools/list_departments`, {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ filter: "COMPSCI" }),
+    })).json();
+    assert.ok(typeof rest.result === "string" && rest.result.includes("COMPSCI"), "REST call returned no usable text");
+
+    // Failures arrive as a readable answer, not a transport error the model cannot see.
+    const failed = await fetch(`http://127.0.0.1:${port}/tools/get_course`, {
+      method: "POST", headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ courseId: "NOPE 999" }),
+    });
+    assert.equal(failed.status, 200);
+    assert.equal((await failed.json()).isError, true);
+
+    const code = async (path, init) => (await fetch(`http://127.0.0.1:${port}${path}`, init)).status;
+    assert.equal(await code("/tools/nope", { method: "POST", headers: auth, body: "{}" }), 404);
+    assert.equal(await code("/tools/list_terms", { headers: auth }), 405, "GET on a tool should be rejected");
+    assert.equal(await code("/tools/list_terms", { method: "POST", headers: auth, body: "not json" }), 400);
+    assert.equal(await code("/tools/list_terms", { method: "POST", body: "{}" }), 401, "REST must honour the token");
+    assert.equal(await code("/openapi.json"), 401, "the document must honour the token too");
+  } finally {
+    srv.kill();
+  }
+});
+
 await test("term parsing reaches all six quarters", async () => {
   const src = await import("node:fs").then((fs) => fs.promises.readFile("anteater-mcp.mjs", "utf8"));
   const block = src.slice(src.indexOf("const QUARTERS = "), src.indexOf("let _deptCache"));

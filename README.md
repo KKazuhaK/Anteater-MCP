@@ -190,6 +190,11 @@ the Claude one, only the connector UI differs.
 > anything. See [HTTP mode security](#http-mode-security).
 </details>
 
+> ⚠️ **ChatGPT's MCP plugins are web-only.** OpenAI's own documentation says developer
+> mode is "available to Pro, Plus, Business, Enterprise, and Education accounts **on the
+> web**" — the phone apps cannot reach an MCP server. For ChatGPT on a phone, use a
+> Custom GPT whose Action points at this server's **REST facade**, described below.
+
 ### Which ChatGPT route gets you what
 
 | | Custom GPT + Actions | Developer mode + MCP |
@@ -199,7 +204,7 @@ the Claude one, only the connector UI differs.
 | Can carry your Anteater key | Yes, API Key → Bearer | Yes, server-side via `ANTEATER_API_KEY` |
 | What the model gets | 12 raw API operations, JSON | All 19 tools, formatted, plus 6 prompts and 4 resources |
 | Prerequisite / conflict checking | No — the model must reason it out | Yes |
-| Works on mobile | Yes | Yes |
+| Works on mobile | Yes | **No** — MCP plugins are web-only |
 
 ### On your phone
 
