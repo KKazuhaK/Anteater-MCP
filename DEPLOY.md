@@ -34,17 +34,16 @@ Set it as `ANTEATER_MCP_TOKEN`. With it set, the HTTP transport accepts a reques
 it carries the token, as either:
 
 - `Authorization: Bearer <token>` — use this wherever you can set headers, and
-- `https://your.domain/<token>/mcp` — the path form, for clients that accept only a URL.
+- `https://your.domain/mcp?token=<token>` — for clients that accept only a URL.
 
 **Prefer the header wherever the client allows one.** Claude's connector dialog has a
 *Request headers* section, so the token does not have to go in the URL there.
 
 `/health` stays open so uptime checks work without the token.
 
-> The path form puts the secret in the URL, so it will appear in reverse-proxy access
-> logs and is stored by whoever you give the URL to. Turn off URI logging (shown below)
-> and rotate the token if it leaks. It is a rate-limit key, not a password to anything of
-> yours.
+> The query form still puts the secret in the URL, so it may appear in browser history,
+> reverse-proxy access logs, and stored connector settings. Turn off URI logging (shown
+> below) and rotate the token if it leaks.
 
 ## 2. Deploy with Docker Compose (recommended)
 
@@ -59,7 +58,7 @@ uses a read-only root filesystem, and refuses to start until a token is provided
 ```bash
 mkdir -p /opt/anteater-mcp
 cd /opt/anteater-mcp
-curl -O https://raw.githubusercontent.com/KKazuhaK/anteater-mcp/main/compose.yaml
+curl -O https://raw.githubusercontent.com/KKazuhaK/Anteater-MCP/main/compose.yaml
 cat > .env <<EOF
 ANTEATER_MCP_TOKEN=$(openssl rand -hex 24)
 ANTEATER_API_KEY=<your optional Anteater API key>
@@ -88,7 +87,7 @@ Works with no release published, and is also what you want for a fork. The image
 file plus a base layer, so this takes seconds.
 
 ```bash
-git clone https://github.com/KKazuhaK/anteater-mcp.git /opt/anteater-mcp-src
+git clone https://github.com/KKazuhaK/Anteater-MCP.git /opt/anteater-mcp-src
 cd /opt/anteater-mcp-src
 docker build -t anteater-mcp:local .
 
@@ -117,7 +116,7 @@ default, and a private package is why a first pull would ask you to log in.
 
 ```bash
 sudo useradd --system --create-home --shell /usr/sbin/nologin anteater
-sudo -u anteater git clone https://github.com/KKazuhaK/anteater-mcp.git /home/anteater/anteater-mcp
+sudo -u anteater git clone https://github.com/KKazuhaK/Anteater-MCP.git /home/anteater/anteater-mcp
 node -v   # must be Node 24 LTS
 ```
 
@@ -175,24 +174,27 @@ curl -s localhost:8787/health
 ```
 
 The startup log tells you whether auth is on. If it warns that no token is set, stop and
-fix that before going further.
+fix that before going further. Each HTTP exchange then produces structured
+`http.request` and `http.response` JSON lines. The application redacts URL tokens and
+does not log Authorization values or RPC arguments. Reverse-proxy logs are separate and
+must still be disabled or redacted when URL authentication is used.
 
 ## 5. Put it behind TLS
 
 Use whatever you already run. The server speaks plain HTTP on loopback and does not care
-what fronts it — it only has to satisfy five requirements, because of SSE and because the
-token travels in the path.
+what fronts it — it only has to satisfy five requirements, because of SSE and because a
+URL-only client sends the token in the query string.
 
 | Requirement | Why | If you get it wrong |
 |---|---|---|
 | **Do not buffer responses** | `GET /mcp` is a Server-Sent Events stream, and `POST /mcp` returns SSE when the client asks for it | The client hangs waiting for a response the proxy is holding |
 | **Read timeout above 25 seconds**, 300s is comfortable | The SSE stream sends a keepalive comment every 25s and is otherwise silent | The proxy drops the stream mid-conversation |
 | **HTTP/1.1 upstream** | Chunked responses and keep-alive | Streaming breaks; nginx in particular defaults to 1.0 |
-| **Pass the path through unchanged** | The token is a path prefix (`/<token>/mcp`) | Every request 401s |
+| **Pass the complete request target through unchanged** | URL-only clients use `/mcp?token=<token>` | Every request 401s |
 | **Do not add an `Origin` header** | The server validates `Origin` when one is present, and allows requests without one, which is what Claude and ChatGPT send | A proxy-injected origin gets 403 |
 
 Two more things that are not requirements but you want them: **keep the URI out of access
-logs**, since the token is in it, and let the proxy hold the certificate so the server
+logs**, since the token may be in it, and let the proxy hold the certificate so the server
 never sees one.
 
 <details open><summary><b>nginx</b></summary>
@@ -204,7 +206,7 @@ server {
     server_name mcp.example.com;
     # ssl_certificate / ssl_certificate_key from certbot
 
-    access_log off;                      # the token is in the URI
+    access_log off;                      # a URL token is in the request URI
 
     location / {
         proxy_pass http://127.0.0.1:8787;
@@ -226,7 +228,7 @@ mcp.example.com {
     log {
         output file /var/log/caddy/anteater-mcp.log
         format filter {
-            request>uri delete           # the token is in the URI
+            request>uri delete           # a URL token is in the request URI
         }
     }
     reverse_proxy 127.0.0.1:8787 {
@@ -276,7 +278,7 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST https://mcp.example.com/mcp \
   -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"ping"}'
 # expect 401 — the token is missing
 
-curl -s -X POST https://mcp.example.com/<token>/mcp \
+curl -s -X POST 'https://mcp.example.com/mcp?token=<token>' \
   -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"ping"}'
 # expect {"jsonrpc":"2.0","id":1,"result":{}}
 ```
@@ -301,12 +303,11 @@ On **claude.ai in a browser** (not the phone):
    header values encrypted and never displays them again.
 5. Save, then confirm the 17 tools appear
 
-Putting the token in a header rather than the path keeps it out of your reverse proxy's
-access log and out of the stored connector URL. The path form still works for clients
-with no header field:
+Putting the token in a header rather than the URL keeps it out of your reverse proxy's
+access log and out of the stored connector URL. For clients with no header field:
 
 ```
-https://mcp.example.com/<token>/mcp
+https://mcp.example.com/mcp?token=<token>
 ```
 
 Free accounts can have one custom connector; Pro and Max more.

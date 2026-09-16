@@ -236,9 +236,20 @@ await test("HTTP transport enforces the token when one is set", async () => {
 
     assert.equal((await post("/mcp")).status, 401, "missing token was accepted");
     assert.equal((await post("/mcp", { Authorization: "Bearer wrong" })).status, 401, "wrong token was accepted");
+    assert.equal((await post("/mcp?token=wrong")).status, 401, "wrong query token was accepted");
     assert.equal((await post(`/wrongtoken/mcp`)).status, 401, "wrong path token was accepted");
     assert.equal((await post("/mcp", { Authorization: `Bearer ${token}` })).status, 200, "correct bearer was rejected");
-    assert.equal((await post(`/${token}/mcp`)).status, 200, "correct path token was rejected");
+    assert.equal((await post(`/mcp?token=${token}`)).status, 200, "correct query token was rejected");
+    assert.equal((await post(`/${token}/mcp`)).status, 401, "deprecated path token was still accepted");
+    assert.equal((await post(`/${token}`)).status, 401, "deprecated token-only path was still accepted");
+    assert.equal((await post(`/mcp?token=${token}&token=${token}`)).status, 401, "duplicate query tokens were accepted");
+    assert.equal((await fetch(`http://127.0.0.1:${port}/mcp`, { method: "OPTIONS" })).status, 204, "preflight should not require credentials");
+    const sse = await fetch(`http://127.0.0.1:${port}/mcp?token=${token}`, { headers: { Accept: "text/event-stream" } });
+    assert.equal(sse.status, 200, "authenticated SSE connection was rejected");
+    const sseReader = sse.body.getReader();
+    const firstSseChunk = await sseReader.read();
+    assert.match(new TextDecoder().decode(firstSseChunk.value), /: connected/, "SSE did not acknowledge the connection immediately");
+    await sseReader.cancel();
     assert.equal((await fetch(`http://127.0.0.1:${port}/health`)).status, 200, "health should stay open");
     // The AGPL section 13 source offer must be reachable without credentials, or it
     // is not an offer to the people the clause is about.
@@ -248,6 +259,12 @@ await test("HTTP transport enforces the token when one is set", async () => {
     // Everything else stays closed, including paths that do not exist.
     assert.equal((await fetch(`http://127.0.0.1:${port}/nope`)).status, 401, "unknown paths should not leak");
     assert.doesNotMatch(stderr, /there is no authentication/, "authenticated public bind emitted a false warning");
+    assert.match(stderr, /"event":"http\.request"/, "requests were not logged");
+    assert.match(stderr, /"event":"http\.response"/, "responses were not logged");
+    assert.match(stderr, /"rpc":"ping"/, "RPC method was not logged");
+    assert.match(stderr, /"outcome":"ok"/, "RPC outcome was not logged");
+    assert.doesNotMatch(stderr, new RegExp(token), "the MCP token leaked into logs");
+    assert.match(stderr, /token=\[REDACTED\]/, "query token was not redacted in logs");
   } finally {
     srv.kill();
   }

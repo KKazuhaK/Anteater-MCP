@@ -26,7 +26,7 @@ LPS 31        INTRO INDUCT LOGIC   4      3.61  80%  2108  11         TuTh 14:00
 ## Quickstart
 
 ```bash
-git clone https://github.com/KKazuhaK/anteater-mcp.git
+git clone https://github.com/KKazuhaK/Anteater-MCP.git
 cd anteater-mcp
 node --version                         # Node 24 LTS
 node anteater-mcp.mjs --list-tools     # confirm it runs
@@ -44,7 +44,7 @@ Nothing else is required. An [API key](#api-key) is optional but recommended.
 
 ### Standalone binary
 
-Each [GitHub Release](https://github.com/KKazuhaK/anteater-mcp/releases) contains native
+Each [GitHub Release](https://github.com/KKazuhaK/Anteater-MCP/releases) contains native
 archives for Linux, macOS and Windows on amd64 and arm64, plus `SHA256SUMS.txt`. These do
 not require Node.js:
 
@@ -171,11 +171,15 @@ Add the URL under **Settings → Connectors → Advanced → Developer mode**. A
 work, including prerequisite checking and conflict detection.
 
 ChatGPT's developer mode supports **OAuth, no authentication, or mixed** — there is no
-field for a custom header, so use the path form of the token, exactly as with Claude:
+field for a custom header, so put the token in the URL query string:
 
 ```
-https://<your-domain>/<ANTEATER_MCP_TOKEN>/mcp
+https://<your-domain>/mcp?token=<ANTEATER_MCP_TOKEN>
 ```
+
+This URL form is a compatibility option, not a security improvement: URLs may be saved
+in connector settings and reverse-proxy logs. Use a Bearer header whenever the client
+supports one.
 
 Both transports ChatGPT accepts, SSE and streaming HTTP, are implemented. For a permanent
 deployment rather than a tunnel, follow [DEPLOY.md](DEPLOY.md) — the setup is identical to
@@ -190,7 +194,7 @@ the Claude one, only the connector UI differs.
 | | Custom GPT + Actions | Developer mode + MCP |
 |---|---|---|
 | Server needed | No | Yes, public HTTPS |
-| Auth options | None · API Key (Basic/Bearer/**custom header**) · OAuth | OAuth · none · mixed. Developer mode documents no header field, so use the path token; Claude's own connector dialog *does* take request headers |
+| Auth options | None · API Key (Basic/Bearer/**custom header**) · OAuth | OAuth · none · mixed. Developer mode documents no header field, so use `?token=`; Claude's own connector dialog *does* take request headers |
 | Can carry your Anteater key | Yes, API Key → Bearer | Yes, server-side via `ANTEATER_API_KEY` |
 | What the model gets | 12 raw API operations, JSON | All 17 tools, formatted, plus 6 prompts and 4 resources |
 | Prerequisite / conflict checking | No — the model must reason it out | Yes |
@@ -329,7 +333,7 @@ set -a; . ./.env; set +a # load it without echoing the value
 |---|---|
 | `ANTEATER_API_KEY` | Your secret key. See above. |
 | `ANTEATER_API_BASE` | Defaults to `https://anteaterapi.com`. Point at a self-hosted instance. |
-| `ANTEATER_MCP_TOKEN` | HTTP mode only, and **required before you expose the server**. Clients send `Authorization: Bearer <token>`, which is preferred, or use the path form `https://host/<token>/mcp` where the client has no header field. A token in the path lands in proxy access logs. `/health` stays open. Unset means no authentication, which is only safe on loopback. |
+| `ANTEATER_MCP_TOKEN` | HTTP mode only, and **required before you expose the server**. Clients send `Authorization: Bearer <token>`, which is preferred, or use `https://host/mcp?token=<token>` where the client accepts only a URL. Any token in a URL can land in browser history, connector settings, and proxy logs. `/health` stays open. Unset means no authentication, which is only safe on loopback. |
 | `ANTEATER_ALLOWED_ORIGINS` | HTTP mode only. Comma-separated extra origins to allow. |
 | `HOST` / `PORT` | HTTP mode only; equivalent to `--host` / `--port`. |
 
@@ -356,6 +360,10 @@ node anteater-mcp.mjs --list-tools       # list every tool
 - **Unauthenticated unless `ANTEATER_MCP_TOKEN` is set.** That is fine on loopback and
   not fine anywhere else; the server warns at startup if it is bound off-loopback without
   one. See [DEPLOY.md](DEPLOY.md).
+- **HTTP activity is logged to stderr as one JSON request line and one response line.**
+  Logs include a request ID, method, sanitized target, remote address, status, duration,
+  RPC/tool name, and outcome when available. Authorization values and RPC arguments are
+  never logged; URL token values are shown as `[REDACTED]`.
 - `/health` reports status and the source URL; `/source` redirects to this repository,
   which helps anyone deploying a modified copy comply with AGPL section 13.
 

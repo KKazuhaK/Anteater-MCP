@@ -12,11 +12,11 @@
     "claude",
     "chatgpt"
   ],
-  "homepage": "https://github.com/KKazuhaK/anteater-mcp#readme",
-  "bugs": "https://github.com/KKazuhaK/anteater-mcp/issues",
+  "homepage": "https://github.com/KKazuhaK/Anteater-MCP#readme",
+  "bugs": "https://github.com/KKazuhaK/Anteater-MCP/issues",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KKazuhaK/anteater-mcp.git"
+    "url": "git+https://github.com/KKazuhaK/Anteater-MCP.git"
   },
   "license": "AGPL-3.0-or-later",
   "author": "Kazuha Mo",

@@ -37,7 +37,7 @@ const API_KEY = process.env.ANTEATER_API_KEY || "";
 // Shared secret for the HTTP transport. Unset means no auth, which is only safe on
 // loopback. Anything reachable from the internet must set it.
 const MCP_TOKEN = process.env.ANTEATER_MCP_TOKEN || "";
-const SOURCE_URL = "https://github.com/KKazuhaK/anteater-mcp";
+const SOURCE_URL = "https://github.com/KKazuhaK/Anteater-MCP";
 
 // check-version.mjs parses this exact line and requires it to match package.json.
 const SERVER_INFO = { name: "anteater-mcp", version: "0.0.2" };
@@ -2597,6 +2597,46 @@ function secretEquals(a, b) {
   return timingSafeEqual(x, y);
 }
 
+/** Keep credentials out of this process's own access log. */
+function safeRequestTarget(rawTarget) {
+  try {
+    const url = new URL(rawTarget || "/", "http://localhost");
+    // Redact credential-shaped paths even though path-token authentication is not
+    // supported. This keeps an outdated client from leaking its token into logs.
+    let pathname = url.pathname.replace(/^\/[^/]+(?=\/mcp(?:\/|$))/, "/[REDACTED]");
+    if (MCP_TOKEN && pathname === `/${MCP_TOKEN}`) pathname = "/[REDACTED]";
+    const query = [];
+    for (const [key, value] of url.searchParams) {
+      const sensitive = /token|key|secret|password|authorization/i.test(key);
+      query.push(`${encodeURIComponent(key)}=${sensitive ? "[REDACTED]" : encodeURIComponent(value)}`);
+    }
+    return pathname + (query.length ? `?${query.join("&")}` : "");
+  } catch {
+    return "[INVALID_URL]";
+  }
+}
+
+/** A compact RPC label is useful operationally; arguments may contain private data. */
+function rpcLabel(message) {
+  const one = (m) => {
+    const method = typeof m?.method === "string" ? m.method.slice(0, 100) : "invalid";
+    if (method === "tools/call" && typeof m?.params?.name === "string") {
+      return `${method}:${m.params.name.slice(0, 100)}`;
+    }
+    return method;
+  };
+  return (Array.isArray(message) ? message : [message]).map(one).join(",").slice(0, 300);
+}
+
+function httpLog(event, fields) {
+  process.stderr.write(JSON.stringify({
+    time: new Date().toISOString(),
+    level: "info",
+    event,
+    ...fields,
+  }) + "\n");
+}
+
 function runHttp(port, host) {
   // This endpoint is unauthenticated, so a browser page that can reach it can drive
   // every tool. The MCP spec requires local HTTP servers to validate Origin; without
@@ -2615,7 +2655,36 @@ function runHttp(port, host) {
     }
   };
 
+  let requestSequence = 0;
   const server = http.createServer(async (req, res) => {
+    const requestId = ++requestSequence;
+    const started = process.hrtime.bigint();
+    let rpc;
+    let rpcOutcome;
+    let responseLogged = false;
+    const logResponse = (connectionClosed = false) => {
+      if (responseLogged) return;
+      responseLogged = true;
+      const durationMs = Number(process.hrtime.bigint() - started) / 1e6;
+      httpLog("http.response", {
+        requestId,
+        status: res.statusCode,
+        durationMs: Number(durationMs.toFixed(1)),
+        ...(rpc ? { rpc } : {}),
+        ...(rpcOutcome ? { outcome: rpcOutcome } : {}),
+        ...(connectionClosed && !res.writableFinished ? { connectionClosed: true } : {}),
+      });
+    };
+    res.once("finish", () => logResponse(false));
+    res.once("close", () => logResponse(true));
+    httpLog("http.request", {
+      requestId,
+      method: req.method,
+      target: safeRequestTarget(req.url),
+      remote: req.socket.remoteAddress || "unknown",
+      ...(req.headers["user-agent"] ? { userAgent: String(req.headers["user-agent"]).slice(0, 200) } : {}),
+    });
+
     const origin = req.headers.origin;
     if (!originAllowed(origin)) {
       res.writeHead(403, { "Content-Type": "text/plain" })
@@ -2630,15 +2699,28 @@ function runHttp(port, host) {
       "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version",
       "Access-Control-Expose-Headers": "Mcp-Session-Id",
+      // Query-string credentials are a compatibility fallback. Never let an
+      // intermediary cache a response associated with one.
+      "Cache-Control": "no-store",
     };
 
-    const url = new URL(req.url, `http://${req.headers.host}`);
+    let url;
+    try {
+      // A fixed base is sufficient because only the request target is routed. Do not
+      // trust Host merely to parse a relative URL.
+      url = new URL(req.url || "/", "http://localhost");
+    } catch {
+      return res.writeHead(400, { ...CORS, "Content-Type": "text/plain" }).end("Bad request URL");
+    }
+
+    // Preflight carries no credentials. Authentication applies to the actual request.
+    if (req.method === "OPTIONS") return res.writeHead(204, CORS).end();
 
     // Authentication. Accept the token either as a bearer header, which MCP clients
-    // that let you set headers will use, or as a path prefix (/<token>/mcp), because
-    // a connector UI offers no header field. Prefer the header: a token in the path
-    // ends up in proxy access logs and in the stored connector URL.
-    let path = url.pathname;
+    // that let you set headers will use, or as ?token= for connector UIs that only
+    // accept a URL. Prefer the header: any token in a URL can land in browser history,
+    // proxy logs, and stored settings.
+    const path = url.pathname;
     // /health and /source carry no private information and are the two things an
     // operator or a downstream user may legitimately need without credentials —
     // /source in particular is the AGPL section 13 offer, which would be pointless
@@ -2647,17 +2729,14 @@ function runHttp(port, host) {
     if (MCP_TOKEN && !OPEN_PATHS.has(path)) {
       const header = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
       const viaHeader = header && secretEquals(header, MCP_TOKEN);
-      const prefix = `/${MCP_TOKEN}`;
-      const viaPath = path === prefix || path.startsWith(`${prefix}/`);
-      if (viaPath) path = path.slice(prefix.length) || "/";
-      if (!viaHeader && !viaPath) {
+      const queryTokens = url.searchParams.getAll("token");
+      const viaQuery = queryTokens.length === 1 && secretEquals(queryTokens[0], MCP_TOKEN);
+      if (!viaHeader && !viaQuery) {
         res.writeHead(401, { ...CORS, "Content-Type": "text/plain", "WWW-Authenticate": "Bearer" })
           .end("Unauthorized");
         return;
       }
     }
-
-    if (req.method === "OPTIONS") return res.writeHead(204, CORS).end();
 
     if (path === "/health") {
       return res.writeHead(200, { ...CORS, "Content-Type": "application/json" })
@@ -2680,7 +2759,9 @@ function runHttp(port, host) {
 
     if (req.method === "GET") {
       // Clients may open an SSE stream for server-initiated messages; we have none.
-      res.writeHead(200, { ...CORS, "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+      res.writeHead(200, { ...CORS, "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-store", Connection: "keep-alive" });
+      res.flushHeaders();
+      res.write(": connected\n\n");
       const keepalive = setInterval(() => res.write(": keepalive\n\n"), 25000);
       req.on("close", () => clearInterval(keepalive));
       return;
@@ -2711,18 +2792,25 @@ function runHttp(port, host) {
           .end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }));
       }
 
+      rpc = rpcLabel(msg);
+
       const messages = Array.isArray(msg) ? msg : [msg];
       const results = [];
       for (const m of messages) {
         const r = await handleRpc(m);
         if (r) results.push(r);
       }
+      rpcOutcome = results.some((r) => r?.error)
+        ? "rpc_error"
+        : results.some((r) => r?.result?.isError)
+          ? "tool_error"
+          : results.length ? "ok" : "notification";
       if (!results.length) return res.writeHead(202, CORS).end();
 
       const payload = Array.isArray(msg) ? results : results[0];
       const wantsSse = (req.headers.accept || "").includes("text/event-stream");
       if (wantsSse) {
-        res.writeHead(200, { ...CORS, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+        res.writeHead(200, { ...CORS, "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-store" });
         res.write(`event: message\ndata: ${JSON.stringify(payload)}\n\n`);
         return res.end();
       }
@@ -2735,8 +2823,8 @@ function runHttp(port, host) {
     process.stderr.write(`anteater-mcp is AGPL-3.0-or-later; source: ${SOURCE_URL} (also served at /source)\n`);
     if (MCP_TOKEN) {
       process.stderr.write(
-        `anteater-mcp auth ON — clients must send "Authorization: Bearer <token>", or use ` +
-          `the path form http://${host}:${port}/<token>/mcp\n`,
+        `anteater-mcp auth ON — clients should send "Authorization: Bearer <token>"; ` +
+          `URL-only clients may use http://${host}:${port}/mcp?token=<token>\n`,
       );
     } else if (host !== "127.0.0.1" && host !== "localhost") {
       process.stderr.write(

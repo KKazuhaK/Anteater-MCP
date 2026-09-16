@@ -12,7 +12,7 @@ against. Matching the expected result is a pass. If it doesn't match, record the
 ## 0. Setup
 
 ```bash
-git clone https://github.com/KKazuhaK/anteater-mcp.git
+git clone https://github.com/KKazuhaK/Anteater-MCP.git
 cd anteater-mcp
 node -v        # must match .node-version (Node 24 LTS)
 ```

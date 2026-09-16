@@ -41,4 +41,27 @@ if (dockerNode !== nodeVersion) {
   throw new Error(`Node version mismatch: .node-version=${nodeVersion}, Dockerfile=${dockerNode || "missing"}`);
 }
 
+// The repository URL lives in four places and drifted when the repo was renamed.
+// SOURCE_URL is what the server hands out as its AGPL section 13 offer, so it has to
+// stay pointed at the real repository.
+const sourceUrl = source.match(/const SOURCE_URL = "([^"]+)";/)?.[1];
+const repoUrl = (packageJson.repository?.url || "").replace(/^git\+/, "").replace(/\.git$/, "");
+if (!sourceUrl) {
+  throw new Error("Could not find SOURCE_URL in anteater-mcp.mjs");
+}
+if (sourceUrl !== repoUrl) {
+  throw new Error(`Repository URL mismatch: SOURCE_URL=${sourceUrl}, package.json=${repoUrl}`);
+}
+for (const [field, value] of Object.entries({ homepage: packageJson.homepage, bugs: packageJson.bugs })) {
+  if (value && !String(value).startsWith(repoUrl)) {
+    throw new Error(`package.json ${field} does not match the repository URL: ${value}`);
+  }
+}
+
+const dockerSource = dockerfile.match(/org\.opencontainers\.image\.source="([^"]+)"/)?.[1];
+if (dockerSource !== repoUrl) {
+  throw new Error(`Dockerfile image.source label does not match: ${dockerSource || "missing"}`);
+}
+
 console.log(`app ${packageJson.version} and Node ${nodeVersion} are consistent`);
+console.log(`repository ${repoUrl} is consistent across the server, package.json and Dockerfile`);
