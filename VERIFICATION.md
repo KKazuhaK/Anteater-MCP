@@ -49,7 +49,7 @@ set -a; . ./.env; set +a
 node test-offline.mjs
 ```
 
-**Expected:** all 17 items `ok`, final line `17 passed`, exit code 0.
+**Expected:** all 20 items `ok`, final line `20 passed`, exit code 0.
 
 <details><summary>What each test guards against</summary>
 
@@ -68,6 +68,9 @@ node test-offline.mjs
 | prompts declare arguments and enforce required ones | A missing required argument must be refused, not silently templated |
 | unknown prompt / resource are protocol errors | |
 | completions work offline and respect the 100-value cap | |
+| batch course lookup rejects malformed requests | Empty, oversized and unknown-field batches must fail before any network call |
+| AP exam matching handles common abbreviations | `AP Calc BC` and similar names must resolve without adding a fuzzy-match dependency |
+| degree evaluation preserves AP alternatives and unknowns | OR grants must not become double credit; manual rules must never be marked complete |
 | HTTP transport enforces the token when one is set | An exposed endpoint with no auth is an open proxy on your API quota |
 | every tool name is verb_noun with an approved verb | Six tools once had no verb, which a directory review marked down |
 | confusable tool pairs cross-reference each other | So a model picking between them has the distinction in front of it |
@@ -82,7 +85,7 @@ set -a; . ./.env; set +a
 node test.mjs
 ```
 
-**Expected:** 42 calls total (`initialize` + `tools/list` + 40 `tools/call`). Exactly
+**Expected:** 44 calls total (`initialize` + `tools/list` + 42 `tools/call`). Exactly
 **three** `[isError]` results, and they are the three deliberate error cases at the end:
 
 ```
@@ -316,17 +319,17 @@ TOK=$(openssl rand -hex 16)
 ANTEATER_MCP_TOKEN=$TOK node anteater-mcp.mjs --http --port 8913 &
 sleep 2
 P='{"jsonrpc":"2.0","id":1,"method":"ping"}'
-for c in "curl -s -o /dev/null -w no-token=%{http_code}\\n -X POST localhost:8913/mcp -H Content-Type:application/json -d $P"; do :; done
 curl -s -o /dev/null -w "  no token   = %{http_code}\n" -X POST localhost:8913/mcp -H 'Content-Type: application/json' -d "$P"
 curl -s -o /dev/null -w "  bad bearer = %{http_code}\n" -X POST localhost:8913/mcp -H "Authorization: Bearer nope" -H 'Content-Type: application/json' -d "$P"
 curl -s -o /dev/null -w "  good bearer= %{http_code}\n" -X POST localhost:8913/mcp -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d "$P"
-curl -s -o /dev/null -w "  path form  = %{http_code}\n" -X POST "localhost:8913/$TOK/mcp" -H 'Content-Type: application/json' -d "$P"
+curl -s -o /dev/null -w "  good query = %{http_code}\n" -X POST "localhost:8913/mcp?token=$TOK" -H 'Content-Type: application/json' -d "$P"
+curl -s -o /dev/null -w "  old path   = %{http_code}\n" -X POST "localhost:8913/$TOK/mcp" -H 'Content-Type: application/json' -d "$P"
 curl -s -o /dev/null -w "  health     = %{http_code}\n" localhost:8913/health
 kill %1
 ```
-✅ `401, 401, 200, 200, 200`
-❌ Any `200` for the first two — an exposed endpoint with no working auth is an open proxy
-on your Anteater API quota
+✅ `401, 401, 200, 200, 401, 200`
+❌ Any `200` for the first two, or `200` for the old path — authentication is bypassable or
+the removed path-token form has regressed
 
 ### 4.5 AGPL section 13 source offer
 
@@ -386,7 +389,7 @@ Put the contents of `claude_desktop_config.example.json` into
 `~/Library/Application Support/Claude/claude_desktop_config.json`, replacing the path
 with an absolute one. Restart.
 
-✅ **17** anteater tools appear in the tool list
+✅ **19** anteater tools appear in the tool list
 ✅ The **6 prompts** appear as slash commands (`plan-quarter`, `find-easy-ge`, …)
 ✅ Asking *"which GE-2 courses for Fall 2026 still have seats and end before 5pm"*
 returns a table with 5-digit section codes
@@ -407,7 +410,7 @@ real data
 
 ```
 Environment:  Node <version> / <OS> / API key: yes|no
-Section 1 offline:      9 passed PASS / FAIL <which items + actual output>
+Section 1 offline:      20 passed PASS / FAIL <which items + actual output>
 Section 2 integration:  only 3 expected isError  PASS / FAIL <actual error text>
 Section 3 regressions:  3.1 PASS 3.2 PASS ... 3.15 <paste full output for failures>
 Section 4 security:     4.1 4.2 4.3 4.4 4.5

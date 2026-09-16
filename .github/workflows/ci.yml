@@ -119,5 +119,30 @@ jobs:
             -d '{"jsonrpc":"2.0","id":1,"method":"ping"}' \
             http://127.0.0.1:18787/mcp | grep -q '"result"'
 
+          curl -fsS -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","id":2,"method":"ping"}' \
+            "http://127.0.0.1:18787/mcp?token=${token}" | grep -q '"result"'
+
+          old_path_status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","id":3,"method":"ping"}' \
+            "http://127.0.0.1:18787/${token}/mcp")
+          test "${old_path_status}" = 401
+
+          duplicate_query_status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","id":4,"method":"ping"}' \
+            "http://127.0.0.1:18787/mcp?token=${token}&token=${token}")
+          test "${duplicate_query_status}" = 401
+
+          logs=$(docker logs "${cid}" 2>&1)
+          grep -q '"event":"http.request"' <<<"${logs}"
+          grep -q '"event":"http.response"' <<<"${logs}"
+          grep -q 'token=\[REDACTED\]' <<<"${logs}"
+          if grep -Fq "${token}" <<<"${logs}"; then
+            echo "MCP token leaked into container logs" >&2
+            exit 1
+          fi
+
           test "$(docker inspect -f '{{.Config.User}}' "${cid}")" = node
           test "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "${cid}")" = true

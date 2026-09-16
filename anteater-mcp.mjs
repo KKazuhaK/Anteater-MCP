@@ -40,7 +40,7 @@ const MCP_TOKEN = process.env.ANTEATER_MCP_TOKEN || "";
 const SOURCE_URL = "https://github.com/KKazuhaK/Anteater-MCP";
 
 // check-version.mjs parses this exact line and requires it to match package.json.
-const SERVER_INFO = { name: "anteater-mcp", version: "0.0.2" };
+const SERVER_INFO = { name: "anteater-mcp", version: "0.0.3" };
 const UA = `${SERVER_INFO.name}/${SERVER_INFO.version} (+${SOURCE_URL})`;
 const PROTOCOL_VERSION = "2025-06-18";
 const SUPPORTED_PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -746,7 +746,7 @@ tool({
   description:
     "Full catalogue detail for one course: description, units, prerequisites (text and structure), " +
     "courses that unlock from it, enrollment restrictions, GE credit, repeatability, and which terms it has been offered. " +
-    "Use this before advising someone to take a course.",
+    "Use this before advising someone to take a course; for several known courses, use get_courses_batch.",
   inputSchema: {
     type: "object",
     properties: { courseId: str('Course, e.g. "COMPSCI 161", "CS161", "I&C SCI 46".') },
@@ -795,7 +795,92 @@ tool({
   },
 });
 
-/* -- 5. search_sections ---------------------------------------------- */
+/* -- 5. get_courses_batch ------------------------------------------ */
+
+tool({
+  name: "get_courses_batch",
+  title: "Get several courses at once",
+  description:
+    "Fetch up to 50 catalogue courses in one call. Returns a compact summary for every course and can " +
+    "optionally include selected detail fields. Use this instead of repeatedly calling get_course when " +
+    "comparing a known list; use search_courses when the course ids are not known yet.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      courseIds: {
+        type: "array",
+        items: { type: "string" },
+        minItems: 1,
+        maxItems: 50,
+        description: 'Courses to fetch, e.g. ["CS 161", "I&C SCI 46", "MATH 2A"].',
+      },
+      include: {
+        type: "array",
+        uniqueItems: true,
+        items: {
+          type: "string",
+          enum: ["description", "prerequisites", "restrictions", "ge", "terms", "instructors", "dependencies"],
+        },
+        description: "Optional detail fields. Omit for the smallest comparison-friendly response.",
+      },
+    },
+    required: ["courseIds"],
+  },
+  async run(a) {
+    if (!Array.isArray(a.courseIds) || !a.courseIds.length) {
+      throw new ApiError("courseIds must contain at least one course.");
+    }
+    if (a.courseIds.length > 50) throw new ApiError("get_courses_batch accepts at most 50 courses per call.");
+    if (a.courseIds.some((id) => typeof id !== "string" || !id.trim())) {
+      throw new ApiError("Every courseIds entry must be a non-empty string.");
+    }
+    if (a.include !== undefined && !Array.isArray(a.include)) throw new ApiError("include must be an array of field names.");
+    const allowedIncludes = new Set(["description", "prerequisites", "restrictions", "ge", "terms", "instructors", "dependencies"]);
+    const invalidInclude = (a.include || []).find((field) => !allowedIncludes.has(field));
+    if (invalidInclude !== undefined) throw new ApiError(`Unknown include field "${invalidInclude}".`);
+
+    const resolved = await Promise.all(a.courseIds.map((id) => resolveCourseId(String(id))));
+    const unique = [...new Set(resolved)];
+    const courses = await api("/v2/rest/courses/batch", { ids: unique.join(",") }, 24 * 3600 * 1000);
+    const byId = new Map((courses || []).map((c) => [String(c.id || "").toUpperCase().replace(/\s+/g, ""), c]));
+    const found = unique.map((id) => byId.get(id.toUpperCase().replace(/\s+/g, ""))).filter(Boolean);
+    const missing = unique.filter((id) => !byId.has(id.toUpperCase().replace(/\s+/g, "")));
+    const include = new Set(a.include || []);
+
+    const rows = found.map((c) => [
+      `${c.department} ${c.courseNumber}`,
+      trunc(c.title, 46),
+      c.minUnits === c.maxUnits ? c.minUnits : `${c.minUnits}-${c.maxUnits}`,
+      c.courseLevel || "-",
+      (c.geList || []).join(",") || "-",
+    ]);
+    const L = [table(["Course", "Title", "Units", "Level", "GE"], rows)];
+
+    for (const c of found) {
+      const details = [];
+      if (include.has("description")) details.push(`Description: ${c.description || "(none)"}`);
+      if (include.has("prerequisites")) details.push(`Prerequisites: ${c.prerequisiteText || "(none)"}`);
+      if (include.has("restrictions")) {
+        details.push(`Restrictions: ${c.restriction || "(none)"}${c.corequisites ? `; corequisites: ${c.corequisites}` : ""}`);
+      }
+      if (include.has("ge")) details.push(`GE: ${(c.geList || []).join(", ") || "(none)"}${c.geText ? ` — ${c.geText}` : ""}`);
+      if (include.has("terms")) details.push(`Recent terms: ${(c.terms || []).slice(-12).reverse().join(", ") || "(none)"}`);
+      if (include.has("instructors")) details.push(`Instructors: ${(c.instructors || []).map((i) => i.name).join(", ") || "(none)"}`);
+      if (include.has("dependencies")) {
+        details.push(
+          `Unlocks: ${(c.dependencies || []).map((d) => typeof d === "string" ? d : `${d.department} ${d.courseNumber}`).join(", ") || "(none)"}`,
+        );
+      }
+      if (details.length) L.push(`\n${c.department} ${c.courseNumber}\n${details.map((x) => `  ${x}`).join("\n")}`);
+    }
+
+    if (missing.length) L.push(`\n⚠ Not found: ${missing.join(", ")}. Check these ids with search_courses.`);
+    L.push(`\n${found.length}/${unique.length} requested course(s) found.`, ATTRIBUTION);
+    return L.join("\n");
+  },
+});
+
+/* -- 6. search_sections ---------------------------------------------- */
 
 tool({
   name: "search_sections",
@@ -1002,7 +1087,7 @@ tool({
   },
 });
 
-/* -- 6. get_course_grades ---------------------------------------------- */
+/* -- 7. get_course_grades ---------------------------------------------- */
 
 tool({
   name: "get_course_grades",
@@ -1115,7 +1200,7 @@ tool({
   },
 });
 
-/* -- 7. get_instructor -------------------------------------------- */
+/* -- 8. get_instructor -------------------------------------------- */
 
 tool({
   name: "get_instructor",
@@ -1181,7 +1266,7 @@ tool({
   },
 });
 
-/* -- 8. get_enrollment_history ----------------------------------------- */
+/* -- 9. get_enrollment_history ----------------------------------------- */
 
 tool({
   name: "get_enrollment_history",
@@ -1318,7 +1403,7 @@ tool({
   },
 });
 
-/* -- 9. check_prerequisites ---------------------------------------- */
+/* -- 10. check_prerequisites ---------------------------------------- */
 
 const GRADE_RANK = { "A+": 12, A: 11, "A-": 10, "B+": 9, B: 8, "B-": 7, "C+": 6, C: 5, "C-": 4, "D+": 3, D: 2, "D-": 1, F: 0, P: 5 };
 
@@ -1447,7 +1532,7 @@ tool({
   },
 });
 
-/* -- 10. check_schedule -------------------------------------------- */
+/* -- 11. check_schedule -------------------------------------------- */
 
 tool({
   name: "check_schedule",
@@ -1689,7 +1774,7 @@ tool({
   },
 });
 
-/* -- 11. recommend_courses ----------------------------------------- */
+/* -- 12. recommend_courses ----------------------------------------- */
 
 tool({
   name: "recommend_courses",
@@ -1817,12 +1902,12 @@ tool({
   },
 });
 
-/* -- 12/13. programs ----------------------------------------------- */
+/* -- 13/14. programs ----------------------------------------------- */
 
 tool({
   name: "list_programs",
   title: "List majors, minors and specializations",
-  description: "List UCI degree programs. Use to find the program id needed by get_program_requirements.",
+  description: "List UCI degree programs. Use to find the program id needed by get_program_requirements or check_degree_progress.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1847,7 +1932,7 @@ tool({
       table(
         ["id", "Name", "Type", "Specializations"],
         list.slice(0, 200).map((p) => [p.id, trunc(p.name, 56), p.type || "", (p.specializations || []).length || (p.specializationRequired ? "required" : "")]),
-      ) + `\n\nPass an id to get_program_requirements.`
+      ) + `\n\nPass an id to get_program_requirements for the raw tree or check_degree_progress for a student-specific check.`
     );
   },
 });
@@ -1858,7 +1943,8 @@ tool({
   description:
     "The BINDING requirement tree for a major, minor or specialization, or the university's " +
     "general undergraduate requirements (GE categories, unit minimums). This is the authoritative " +
-    "list of what must be completed to graduate — use it for 'what do I still need?'. " +
+    "published tree of what must be completed to graduate. To compare a student's record against it, " +
+    "use check_degree_progress. " +
     "For the catalogue's suggested ordering of those requirements across four years, use " +
     "get_sample_program.",
   inputSchema: {
@@ -1938,7 +2024,388 @@ tool({
   },
 });
 
-/* -- 14. get_syllabi ----------------------------------------------- */
+/* -- Degree-progress evaluation helpers ---------------------------- */
+
+const normalizeCourseKey = (value) => String(value || "").toUpperCase().replace(/\s+/g, "");
+
+function parseCompletedCourseEntry(value) {
+  const text = String(value || "").trim();
+  const graded = text.match(/^(.*?):\s*(A[+-]?|B[+-]?|C[+-]?|D[+-]?|F|P|NP|S|U)$/i);
+  if (text.includes(":") && !graded) {
+    throw new ApiError(`Unrecognized grade in completed entry "${text}". Use a letter grade, P/NP or S/U.`);
+  }
+  const course = (graded?.[1] || text).trim();
+  const grade = graded?.[2]?.toUpperCase();
+  return { course, grade, passing: !["F", "NP", "U"].includes(grade) };
+}
+
+function uniqueCourseSets(sets) {
+  const seen = new Set();
+  return sets.filter((set) => {
+    const key = [...set].sort().join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** Convert an AP coursesGranted AND/OR tree to explicit, non-overcrediting choices. */
+function grantCourseAlternatives(node) {
+  if (!node) return [new Set()];
+  if (typeof node === "string") return [new Set([normalizeCourseKey(node)])];
+  if (Array.isArray(node)) {
+    let combinations = [new Set()];
+    for (const child of node) {
+      const next = [];
+      for (const base of combinations) {
+        for (const option of grantCourseAlternatives(child)) next.push(new Set([...base, ...option]));
+      }
+      combinations = uniqueCourseSets(next);
+    }
+    return combinations;
+  }
+  if (Array.isArray(node.AND)) return grantCourseAlternatives(node.AND);
+  if (Array.isArray(node.OR)) return uniqueCourseSets(node.OR.flatMap(grantCourseAlternatives));
+  return [new Set()];
+}
+
+function inferGeCategory(label) {
+  const text = String(label || "").trim().toUpperCase();
+  if (/\bLOWER[- ]DIVISION WRITING\b/.test(text)) return "GE-1A";
+  if (/\bUPPER[- ]DIVISION WRITING\b/.test(text)) return "GE-1B";
+  if (/\b(?:CATEGORY\s*)?VIII\b|^VIII[.\s]/.test(text)) return "GE-8";
+  if (/\b(?:CATEGORY\s*)?VII\b|^VII[.\s]/.test(text)) return "GE-7";
+  if (/\b(?:CATEGORY\s*)?VI\b|^VI[.\s]/.test(text)) return "GE-6";
+  if (/\bVB\b|^VB[.\s]/.test(text)) return "GE-5B";
+  if (/\bVA\b|^VA[.\s]/.test(text)) return "GE-5A";
+  if (/\b(?:CATEGORY\s*)?IV\b|^IV[.\s]/.test(text)) return "GE-4";
+  if (/\b(?:CATEGORY\s*)?III\b|^III[.\s]/.test(text)) return "GE-3";
+  if (/\b(?:CATEGORY\s*)?II\b|^II[.\s]/.test(text)) return "GE-2";
+  return null;
+}
+
+function evaluateDegreeRequirement(node, completed, geCredits = {}, blockId = "") {
+  const label = node?.label || "Unnamed requirement";
+  const type = node?.requirementType || "Unknown";
+
+  if (type === "Course") {
+    const options = [...new Set((node.courses || []).map(normalizeCourseKey).filter(Boolean))];
+    const needed = Math.max(1, Number(node.courseCount) || options.length || 1);
+    const matched = options.filter((course) => completed.has(course));
+    const geCategory = blockId === "GE" ? inferGeCategory(label) : null;
+    const geCount = geCategory ? Math.max(0, Number(geCredits[geCategory]) || 0) : 0;
+    const externalCredits = Math.min(Math.max(0, needed - matched.length), geCount);
+    const count = matched.length + externalCredits;
+
+    if (!options.length && !externalCredits) {
+      return {
+        label, type, status: "unknown", progress: 0, needed, count: 0, matched: [], remaining: [],
+        note: "The catalogue does not provide a machine-checkable course list for this requirement.",
+      };
+    }
+    return {
+      label,
+      type,
+      status: count >= needed ? "satisfied" : count > 0 ? "partial" : "outstanding",
+      progress: Math.min(1, count / needed),
+      needed,
+      count,
+      matched,
+      remaining: options.filter((course) => !completed.has(course)),
+      ...(externalCredits ? { externalCredits, geCategory } : {}),
+    };
+  }
+
+  if (type === "Group") {
+    const children = (node.requirements || []).map((child) =>
+      evaluateDegreeRequirement(child, completed, geCredits, blockId));
+    const needed = Math.max(1, Number(node.requirementCount) || children.length || 1);
+    const satisfiedCount = children.filter((child) => child.status === "satisfied").length;
+    const unknownCount = children.filter((child) => child.status === "unknown").length;
+    const rankedProgress = children.map((child) => child.progress || 0).sort((a, b) => b - a).slice(0, needed);
+    const progress = rankedProgress.reduce((sum, value) => sum + value, 0) / needed;
+    let status;
+    if (satisfiedCount >= needed) status = "satisfied";
+    else if (satisfiedCount + unknownCount >= needed) status = "unknown";
+    else if (satisfiedCount || children.some((child) => child.status === "partial")) status = "partial";
+    else status = "outstanding";
+    return { label, type, status, progress: Math.min(1, progress), needed, satisfiedCount, children };
+  }
+
+  if (type === "Unit") {
+    return {
+      label, type, status: "unknown", progress: 0,
+      note: `Needs ${node.unitCount ?? "a specified number of"} units; completed-course unit values and residency rules are not encoded here.`,
+    };
+  }
+
+  if (type === "Marker") {
+    return {
+      label, type, status: "unknown", progress: 0,
+      note: "This is a non-course requirement and must be verified manually.",
+    };
+  }
+
+  return {
+    label, type, status: "unknown", progress: 0,
+    note: `Unsupported catalogue requirement type: ${type}.`,
+  };
+}
+
+function evaluateDegreeBlock(block, completed, geCredits = {}) {
+  const children = (block.requirements || []).map((node) =>
+    evaluateDegreeRequirement(node, completed, geCredits, block.id));
+  if (!children.length) {
+    return { ...block, status: "unknown", progress: 0, children, note: "No requirement tree was returned." };
+  }
+  const status = children.every((child) => child.status === "satisfied")
+    ? "satisfied"
+    : children.some((child) => child.status === "unknown") &&
+        children.every((child) => ["satisfied", "unknown"].includes(child.status))
+      ? "unknown"
+      : children.some((child) => child.status === "satisfied" || child.status === "partial")
+        ? "partial"
+        : "outstanding";
+  const progress = children.reduce((sum, child) => sum + (child.progress || 0), 0) / children.length;
+  return { ...block, status, progress, children };
+}
+
+function renderDegreeRequirement(result, depth = 0) {
+  const pad = "  ".repeat(depth);
+  const mark = { satisfied: "✓", partial: "◐", outstanding: "✗", unknown: "?" }[result.status] || "?";
+  let line = `${pad}${mark} ${result.label}`;
+  if (result.type === "Course") {
+    line += ` — ${result.count}/${result.needed}`;
+    if (result.externalCredits) line += ` (${result.externalCredits} ${result.geCategory} AP credit)`;
+  } else if (result.type === "Group") {
+    line += ` — ${result.satisfiedCount}/${result.needed} branches complete`;
+  }
+  const lines = [line];
+  if (result.note) lines.push(`${pad}  ${result.note}`);
+  if (result.type === "Course" && result.status !== "satisfied" && result.remaining?.length) {
+    lines.push(`${pad}  Remaining choices: ${result.remaining.slice(0, 10).join(", ")}${result.remaining.length > 10 ? ", …" : ""}`);
+  }
+  for (const child of result.children || []) lines.push(...renderDegreeRequirement(child, depth + 1));
+  return lines;
+}
+
+function findApExam(exams, input) {
+  const query = normalizeExamQuery(input);
+  const exact = exams.filter((exam) =>
+    normalizeExamQuery(exam.fullName) === query ||
+    (exam.catalogueName && normalizeExamQuery(exam.catalogueName) === query));
+  if (exact.length === 1) return { exam: exact[0], exact: true };
+  const ranked = rankExamMatches(exams, input, 3);
+  const confident = ranked[0] && ranked[0].score >= 72 && (!ranked[1] || ranked[0].score - ranked[1].score >= 8);
+  return confident ? { exam: ranked[0].exam, exact: false, score: ranked[0].score } : { suggestions: ranked };
+}
+
+function buildApCreditCandidates(exams, apScores, maxCandidates = 512) {
+  const groups = [];
+  const warnings = [];
+  const geCredits = {};
+  let unitsGranted = 0;
+
+  for (const [inputName, rawScore] of Object.entries(apScores || {})) {
+    const score = Number(rawScore);
+    if (!Number.isFinite(score)) {
+      warnings.push(`Skipped AP exam "${inputName}": score is not numeric.`);
+      continue;
+    }
+    const found = findApExam(exams, inputName);
+    if (!found.exam) {
+      const suggestions = (found.suggestions || []).map((x) => x.exam.fullName).join(", ");
+      warnings.push(`Skipped ambiguous AP exam "${inputName}"${suggestions ? `; candidates: ${suggestions}` : ""}.`);
+      continue;
+    }
+    if (!found.exact) warnings.push(`Interpreted AP exam "${inputName}" as "${found.exam.fullName}" (${found.score}% match).`);
+    const reward = (found.exam.rewards || []).find((r) => (r.acceptableScores || []).map(Number).includes(score));
+    if (!reward) {
+      warnings.push(`${found.exam.fullName} score ${score} has no recorded UCI credit reward.`);
+      continue;
+    }
+    const options = grantCourseAlternatives(reward.coursesGranted);
+    groups.push({ label: `${found.exam.fullName} ${score}`, options });
+    for (const [category, count] of Object.entries(reward.geGranted || {})) {
+      geCredits[category] = (geCredits[category] || 0) + (count === true ? 1 : Number(count) || 0);
+    }
+    unitsGranted += Number(reward.unitsGranted) || 0;
+  }
+
+  let candidates = [{ courses: new Set(), choices: [] }];
+  let truncated = false;
+  for (const group of groups) {
+    const next = [];
+    for (const base of candidates) {
+      for (const option of group.options) {
+        next.push({
+          courses: new Set([...base.courses, ...option]),
+          choices: [...base.choices, { label: group.label, courses: [...option].sort() }],
+        });
+      }
+    }
+    candidates = next.slice(0, maxCandidates);
+    if (next.length > maxCandidates) truncated = true;
+  }
+  if (truncated) warnings.push(`AP credit alternatives exceeded ${maxCandidates}; the alternative search was capped.`);
+  return { candidates, geCredits, unitsGranted, warnings };
+}
+
+/* -- 15. check_degree_progress ------------------------------------ */
+
+tool({
+  name: "check_degree_progress",
+  title: "Check progress toward a degree",
+  description:
+    "Deterministically compare completed courses and AP scores with a major's published requirement tree, " +
+    "optionally including a specialization, minor, UC/GE blocks or honors requirements. Distinguishes satisfied, " +
+    "partial, outstanding and not-machine-verifiable requirements; unlike the degree-check prompt, this tool does " +
+    "not ask the model to invent a degree audit. Use get_program_requirements when only the raw published tree is needed.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      programId: str('Major id from list_programs, e.g. "BS-201".'),
+      specializationId: str("Optional specialization id."),
+      minorId: str("Optional minor id."),
+      catalogYear: str('Catalog year, e.g. "20262027". Defaults to the year currently in effect.'),
+      completed: {
+        type: "array",
+        items: { type: "string" },
+        description: 'Completed UCI courses, optionally with grades, e.g. ["ICS 31:A", "MATH 2A"].',
+      },
+      apScores: {
+        type: "object",
+        additionalProperties: { type: "number" },
+        description: 'AP exam scores by name, e.g. {"AP Calc BC": 5}. Ambiguous names are not guessed.',
+      },
+      undergradBlocks: {
+        type: "array",
+        uniqueItems: true,
+        items: { type: "string", enum: ["UC", "GE", "CHC2", "CHC4"] },
+        description: 'University-wide blocks to check. Defaults to ["UC", "GE"]. Pass [] to check only the program blocks.',
+      },
+    },
+    required: ["programId"],
+  },
+  async run(a) {
+    if (typeof a.programId !== "string" || !a.programId.trim()) {
+      throw new ApiError("programId is required — call list_programs to find one.");
+    }
+    if (a.completed !== undefined && !Array.isArray(a.completed)) {
+      throw new ApiError("completed must be an array of course strings.");
+    }
+    if (Array.isArray(a.completed) && a.completed.some((course) => typeof course !== "string" || !course.trim())) {
+      throw new ApiError("Every completed entry must be a non-empty course string.");
+    }
+    if (a.apScores !== undefined && (a.apScores === null || typeof a.apScores !== "object" || Array.isArray(a.apScores))) {
+      throw new ApiError("apScores must be an object mapping AP exam names to numeric scores.");
+    }
+    const warnings = [];
+    const catalogYear = a.catalogYear || currentCatalogYear();
+    const rawCompleted = Array.isArray(a.completed) ? a.completed : [];
+    const parsedCompleted = rawCompleted.map(parseCompletedCourseEntry);
+    for (const entry of parsedCompleted.filter((item) => !item.passing)) {
+      warnings.push(`Did not count ${entry.course}:${entry.grade} as completed because the grade earns no course credit.`);
+    }
+    const completedIds = await Promise.all(parsedCompleted.filter((entry) => entry.passing).map(async (entry) =>
+      normalizeCourseKey(await resolveCourseId(entry.course))));
+    const completed = new Set(completedIds.filter(Boolean));
+
+    const specs = [
+      { id: a.programId, label: "Major", path: "/v2/rest/programs/major", params: { programId: a.programId, catalogYear }, required: true },
+    ];
+    if (a.specializationId) {
+      specs.push({ id: a.specializationId, label: "Specialization", path: "/v2/rest/programs/specialization", params: { programId: a.specializationId, catalogYear } });
+    }
+    if (a.minorId) {
+      specs.push({ id: a.minorId, label: "Minor", path: "/v2/rest/programs/minor", params: { programId: a.minorId, catalogYear } });
+    }
+    if (a.undergradBlocks !== undefined && !Array.isArray(a.undergradBlocks)) {
+      throw new ApiError("undergradBlocks must be an array.");
+    }
+    const undergradBlocks = a.undergradBlocks === undefined ? ["UC", "GE"] : [...new Set(a.undergradBlocks)];
+    for (const id of undergradBlocks) {
+      if (!["UC", "GE", "CHC2", "CHC4"].includes(id)) throw new ApiError(`Unknown undergrad block "${id}".`);
+      specs.push({ id, label: id, path: "/v2/rest/programs/ugradRequirements", params: { id, catalogYear } });
+    }
+
+    const fetched = await Promise.all(specs.map(async (spec) => {
+      try {
+        const data = await api(spec.path, spec.params, 24 * 3600 * 1000);
+        if (data.catalogYear && data.catalogYear !== catalogYear) {
+          warnings.push(`${spec.label} ${spec.id}: requested catalogue ${catalogYear}, but the API served ${data.catalogYear}.`);
+        }
+        return {
+          id: spec.id,
+          label: spec.label,
+          name: data.name || `${spec.label} requirements`,
+          catalogYear: data.catalogYear || catalogYear,
+          requirements: data.requirements || [],
+        };
+      } catch (error) {
+        if (spec.required) throw error;
+        warnings.push(`Could not load ${spec.label} ${spec.id}: ${error.message}`);
+        return null;
+      }
+    }));
+    const blocks = fetched.filter(Boolean);
+
+    let ap = { candidates: [{ courses: new Set(), choices: [] }], geCredits: {}, unitsGranted: 0, warnings: [] };
+    if (a.apScores && Object.keys(a.apScores).length) {
+      const exams = await api("/v2/rest/apExams", {}, 24 * 3600 * 1000);
+      ap = buildApCreditCandidates(exams, a.apScores);
+      warnings.push(...ap.warnings);
+    }
+
+    let best = null;
+    for (const candidate of ap.candidates) {
+      const credited = new Set([...completed, ...candidate.courses]);
+      const evaluated = blocks.map((block) => evaluateDegreeBlock(block, credited, ap.geCredits));
+      const score = evaluated.reduce((sum, block) => sum + block.progress, 0);
+      if (!best || score > best.score) best = { score, candidate, evaluated };
+    }
+    const evaluated = best?.evaluated || blocks.map((block) => evaluateDegreeBlock(block, completed, ap.geCredits));
+    const overall = evaluated.every((block) => block.status === "satisfied")
+      ? "satisfied"
+      : evaluated.some((block) => block.status === "unknown") &&
+          evaluated.every((block) => ["satisfied", "unknown"].includes(block.status))
+        ? "unknown"
+        : evaluated.some((block) => ["satisfied", "partial"].includes(block.status))
+          ? "partial"
+          : "outstanding";
+    const percent = evaluated.length
+      ? Math.round(100 * evaluated.reduce((sum, block) => sum + block.progress, 0) / evaluated.length)
+      : 0;
+
+    const L = [
+      `Degree progress for ${blocks[0]?.name || a.programId}`,
+      `Catalogue requested: ${catalogYear} | Completed courses supplied: ${completed.size}`,
+      `Overall: ${overall.toUpperCase()} | machine-checkable progress estimate: ${percent}%`,
+    ];
+    if (best?.candidate.choices.length) {
+      L.push(`\nAP credit interpretation selected to fit the published tree:`);
+      for (const choice of best.candidate.choices) {
+        L.push(`  • ${choice.label}: ${choice.courses.length ? choice.courses.join(" + ") : "units/GE credit only"}`);
+      }
+      if (ap.unitsGranted) L.push(`  Recorded AP units: ${ap.unitsGranted} (reported only; not applied to Unit/residency rules).`);
+    }
+
+    for (const block of evaluated) {
+      L.push(`\n${block.label}: ${block.name} — ${block.status.toUpperCase()} (${Math.round(block.progress * 100)}%)`);
+      if (block.note) L.push(`  ${block.note}`);
+      for (const child of block.children) L.push(...renderDegreeRequirement(child, 1));
+    }
+    if (warnings.length) L.push(`\nWarnings:\n${warnings.map((warning) => `  ⚠ ${warning}`).join("\n")}`);
+    L.push(
+      `\nImportant: this is a planning check, not an official degree audit. Marker requirements, minimum-grade text, ` +
+        `course-overlap limits, residency, transfer work and advisor-approved substitutions may require manual review.`,
+      ATTRIBUTION,
+    );
+    return L.join("\n");
+  },
+});
+
+/* -- 16. get_syllabi ----------------------------------------------- */
 
 tool({
   name: "get_syllabi",
@@ -1979,7 +2446,78 @@ tool({
   },
 });
 
-/* -- 15. get_ap_credit ------------------------------------------------- */
+/* -- AP exam matching helpers -------------------------------------- */
+
+const AP_TOKEN_ALIASES = {
+  CALC: "CALCULUS",
+  COMP: "COMPUTER",
+  SCI: "SCIENCE",
+  GOV: "GOVERNMENT",
+  HIST: "HISTORY",
+  LANG: "LANGUAGE",
+  LIT: "LITERATURE",
+  ENV: "ENVIRONMENTAL",
+  EURO: "EUROPEAN",
+  PHYS: "PHYSICS",
+  PSYCH: "PSYCHOLOGY",
+  STATS: "STATISTICS",
+};
+
+function normalizeExamQuery(value) {
+  const tokens = String(value || "").toUpperCase().match(/[A-Z0-9]+/g) || [];
+  if (tokens[0] === "AP") tokens.shift();
+  return tokens.map((t) => AP_TOKEN_ALIASES[t] || t).join(" ");
+}
+
+function editDistance(a, b) {
+  if (!a) return b.length;
+  if (!b) return a.length;
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j++) {
+      current[j] = Math.min(
+        current[j - 1] + 1,
+        previous[j] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    previous = current;
+  }
+  return previous[b.length];
+}
+
+function examSimilarity(query, candidate) {
+  const q = normalizeExamQuery(query);
+  const c = normalizeExamQuery(candidate);
+  if (!q || !c) return 0;
+  if (q === c) return 100;
+  if (c.includes(q)) return Math.max(82, 98 - Math.max(0, c.length - q.length));
+
+  const qt = new Set(q.split(" "));
+  const ct = new Set(c.split(" "));
+  const shared = [...qt].filter((t) => ct.has(t)).length;
+  const coverage = shared / qt.size;
+  const precision = shared / ct.size;
+  const edit = 1 - editDistance(q, c) / Math.max(q.length, c.length);
+  return Math.max(0, Math.round(100 * (0.55 * coverage + 0.15 * precision + 0.3 * edit)));
+}
+
+function rankExamMatches(exams, query, limit = 5) {
+  return exams
+    .map((exam) => ({
+      exam,
+      score: Math.max(
+        examSimilarity(query, exam.fullName),
+        exam.catalogueName ? examSimilarity(query, exam.catalogueName) : 0,
+      ),
+    }))
+    .filter((x) => x.score >= 35)
+    .sort((a, b) => b.score - a.score || String(a.exam.fullName).localeCompare(String(b.exam.fullName)))
+    .slice(0, limit);
+}
+
+/* -- 17. get_ap_credit ------------------------------------------------- */
 
 /** Render the AND/OR tree the AP reward endpoint uses for granted courses. */
 function renderGrant(node) {
@@ -2008,13 +2546,41 @@ tool({
   inputSchema: {
     type: "object",
     properties: {
-      exam: str('Exam name or part of one, e.g. "Calculus BC", "Computer Science". Omit to list all exams.'),
+      exam: str('Exam name, abbreviation or part of one, e.g. "AP Calc BC", "Comp Sci Principles". Omit to list all exams.'),
     },
   },
   async run(a) {
     const list = await api("/v2/rest/apExams", {}, 24 * 3600 * 1000);
-    const q = (a.exam || "").trim().toUpperCase();
-    const hits = q ? list.filter((e) => (e.fullName || "").toUpperCase().includes(q) || (e.catalogueName || "").toUpperCase().includes(q)) : list;
+    const q = (a.exam || "").trim();
+    let hits = list;
+    let matchNote = "";
+    if (q) {
+      const normalized = normalizeExamQuery(q);
+      const exact = list.filter((e) =>
+        normalizeExamQuery(e.fullName) === normalized ||
+        (e.catalogueName && normalizeExamQuery(e.catalogueName) === normalized));
+      const substring = list.filter((e) =>
+        normalizeExamQuery(e.fullName).includes(normalized) ||
+        (e.catalogueName && normalizeExamQuery(e.catalogueName).includes(normalized)));
+      if (exact.length) {
+        hits = exact;
+      } else if (substring.length) {
+        hits = substring;
+      } else {
+        const ranked = rankExamMatches(list, q);
+        const confident = ranked[0] && ranked[0].score >= 72 && (!ranked[1] || ranked[0].score - ranked[1].score >= 8);
+        if (!confident) {
+          if (!ranked.length) return `No AP exam resembles "${a.exam}". Call get_ap_credit with no argument to list all ${list.length}.`;
+          return (
+            `No unambiguous AP exam match for "${a.exam}". Did you mean:\n\n` +
+            table(["Exam", "Match"], ranked.map((x) => [x.exam.fullName, `${x.score}%`])) +
+            `\n\nRe-run with the exact exam name; no credit was assumed.`
+          );
+        }
+        hits = [ranked[0].exam];
+        matchNote = `Interpreted "${a.exam}" as "${ranked[0].exam.fullName}" (${ranked[0].score}% match).\n\n`;
+      }
+    }
 
     if (!hits.length) return `No AP exam matches "${a.exam}". Call get_ap_credit with no argument to list all ${list.length}.`;
 
@@ -2026,6 +2592,7 @@ tool({
     }
 
     const L = [];
+    if (matchNote) L.push(matchNote.trim(), "");
     for (const e of hits) {
       L.push(`${e.fullName}`);
       if (e.catalogueName) L.push(`  apScores key for check_prerequisites: "${e.catalogueName}"`);
@@ -2048,7 +2615,7 @@ tool({
   },
 });
 
-/* -- 16. get_sample_program -------------------------------------------- */
+/* -- 18. get_sample_program -------------------------------------------- */
 
 tool({
   name: "get_sample_program",
@@ -2108,7 +2675,7 @@ tool({
   },
 });
 
-/* -- 17. get_course_materials ------------------------------------------ */
+/* -- 19. get_course_materials ------------------------------------------ */
 
 tool({
   name: "get_course_materials",
@@ -2210,9 +2777,9 @@ Typical flow for "help me pick classes":
   5. check_prerequisites — confirm eligibility; get_ap_credit resolves AP-score substitutions.
   6. check_schedule — validate the final section codes for meeting and final-exam conflicts.
 
-Degree planning: list_programs -> get_program_requirements for the binding rules, and
-get_sample_program for the catalogue's suggested sequence. get_program_requirements with
-kind "ugrad" returns the university-wide GE requirements.
+Degree planning: list_programs -> check_degree_progress for a deterministic student-specific
+check, get_program_requirements for the raw published rules, and get_sample_program for the
+catalogue's suggested sequence. check_degree_progress can include UC/GE blocks and AP credit.
 
 Six prompts package these flows end to end: plan-quarter, pick-professor, find-easy-ge,
 check-my-schedule, can-i-take, degree-check. Prefer them when the request matches.
@@ -2321,15 +2888,21 @@ const PROMPTS = [
   {
     name: "degree-check",
     title: "Check degree progress",
-    description: "Compare completed coursework against a major's requirements and plan what is left.",
-    arguments: [arg("major", 'Your major, e.g. "Computer Science".', true), arg("completed", "Courses you have already finished.")],
-    build: ({ major, completed }) =>
+    description: "Run a deterministic progress check against a major's requirements and plan what is left.",
+    arguments: [
+      arg("major", 'Your major, e.g. "Computer Science".', true),
+      arg("completed", "Courses you have already finished."),
+      arg("apScores", 'Optional AP exam scores, e.g. "AP Calc BC: 5".'),
+    ],
+    build: ({ major, completed, apScores }) =>
       `Check my progress toward a ${major} degree at UCI.\n\n` +
       `Completed: ${completed || "(ask me)"}\n\n` +
-      `1. list_programs to find the program id, then get_program_requirements for the full tree.\n` +
-      `2. Work through each requirement and mark it satisfied, partially satisfied, or outstanding.\n` +
-      `3. get_sample_program for the catalogue's recommended sequence, to sanity-check my pacing.\n` +
-      `4. get_program_requirements with kind "ugrad" for the university-wide GE requirements.\n\n` +
+      `AP scores: ${apScores || "(none given — ask whether I have any relevant scores)"}\n\n` +
+      `1. list_programs to find the program id.\n` +
+      `2. check_degree_progress with my completed courses and AP scores; include the default UC and GE blocks. ` +
+      `Do not override its unknown or not-machine-verifiable results with guesses.\n` +
+      `3. get_program_requirements only if the raw published tree is needed to explain an uncertain rule.\n` +
+      `4. get_sample_program for the catalogue's recommended sequence, to sanity-check my pacing.\n\n` +
       `Give me a clear list of what is left, and which of it is offered next term.`,
   },
 ];

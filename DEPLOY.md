@@ -10,7 +10,7 @@ works from your phone. Two things to know before you start:
    syncs to the iOS and Android apps. You cannot add a new server from the phone itself.
 
 > **Don't want a server at all?** The [ChatGPT Custom GPT route](README.md#chatgpt) needs
-> no hosting and works on mobile today. It gives you 12 raw API operations instead of 17
+> no hosting and works on mobile today. It gives you 12 raw API operations instead of 19
 > tools, and no prerequisite or conflict checking, but it is free and takes five minutes.
 
 ---
@@ -76,7 +76,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Use `ANTEATER_MCP_IMAGE_TAG=v0.0.2` in `.env` to pin an immutable release instead of
+Use `ANTEATER_MCP_IMAGE_TAG=v0.0.3` in `.env` to pin an immutable release instead of
 tracking `latest`. Continue at [Put it behind TLS](#5-put-it-behind-tls) to expose it safely.
 If the first pull asks you to authenticate, the repository owner has not yet changed the
 new GHCR package from its initial private visibility to **Public**.
@@ -104,7 +104,7 @@ For that to take effect, `compose.yaml` reads `ANTEATER_MCP_IMAGE`; set
 
 ```bash
 npm run check:version          # package.json and the server must agree
-git tag v0.0.2 && git push origin v0.0.2
+git tag v0.0.3 && git push origin v0.0.3
 ```
 
 The release workflow validates the tag against the package version, rebuilds the test
@@ -301,7 +301,7 @@ On **claude.ai in a browser** (not the phone):
    the connector, which is exactly what the next step answers.
 4. Under **Request headers**, add `Authorization` = `Bearer <your token>`. Claude stores
    header values encrypted and never displays them again.
-5. Save, then confirm the 17 tools appear
+5. Save, then confirm the 19 tools appear
 
 Putting the token in a header rather than the URL keeps it out of your reverse proxy's
 access log and out of the stored connector URL. For clients with no header field:

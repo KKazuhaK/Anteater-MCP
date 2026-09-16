@@ -3,6 +3,7 @@
 import { readFile } from "node:fs/promises";
 
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+const packageLock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
 const source = await readFile(new URL("../anteater-mcp.mjs", import.meta.url), "utf8");
 const nodeVersion = (await readFile(new URL("../.node-version", import.meta.url), "utf8")).trim();
 const dockerfile = await readFile(new URL("../Dockerfile", import.meta.url), "utf8");
@@ -15,6 +16,13 @@ if (!match) {
 if (match[1] !== packageJson.version) {
   throw new Error(
     `Version mismatch: package.json=${packageJson.version}, anteater-mcp.mjs=${match[1]}`,
+  );
+}
+
+if (packageLock.version !== packageJson.version || packageLock.packages?.[""]?.version !== packageJson.version) {
+  throw new Error(
+    `Version mismatch: package.json=${packageJson.version}, package-lock.json=${packageLock.version}, ` +
+      `package-lock root=${packageLock.packages?.[""]?.version}`,
   );
 }
 

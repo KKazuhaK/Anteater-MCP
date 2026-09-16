@@ -5,7 +5,7 @@ An MCP server that lets Claude and ChatGPT help you pick classes at UC Irvine.
 It wraps [Anteater API](https://icssc.link/about-anteaterapi) — UCI's course catalogue,
 the live schedule of classes (WebSoc), historical grade distributions, enrollment
 history, prerequisite trees, AP credit and degree requirements — and exposes them as
-**17 tools, 6 guided prompts and 4 reference resources**, shaped around the questions
+**19 tools, 6 guided prompts and 4 reference resources**, shaped around the questions
 students actually ask.
 
 **Zero runtime dependencies.** Run the source with Node 24 LTS, or download a standalone
@@ -111,7 +111,7 @@ With an API key:
 }
 ```
 
-Restart Claude Desktop completely (quit, don't just close the window). You should see 17
+Restart Claude Desktop completely (quit, don't just close the window). You should see 19
 anteater tools, and the 6 prompts appear as slash commands.
 
 `claude_desktop_config.example.json` in this repo is the same thing, ready to copy.
@@ -167,8 +167,9 @@ node anteater-mcp.mjs --http --port 8787   # binds 127.0.0.1 only — do not add
 ngrok http 8787      # or: cloudflared tunnel --url http://localhost:8787
 ```
 
-Add the URL under **Settings → Connectors → Advanced → Developer mode**. All 17 tools
-work, including prerequisite checking and conflict detection.
+Add the URL under **Settings → Connectors → Advanced → Developer mode**. All 19 tools
+work, including batch course lookup, deterministic degree-progress checks, prerequisite
+checking and conflict detection.
 
 ChatGPT's developer mode supports **OAuth, no authentication, or mixed** — there is no
 field for a custom header, so put the token in the URL query string:
@@ -196,7 +197,7 @@ the Claude one, only the connector UI differs.
 | Server needed | No | Yes, public HTTPS |
 | Auth options | None · API Key (Basic/Bearer/**custom header**) · OAuth | Access token / API key with a **Bearer, Basic or custom header** scheme · OAuth · none. Claude's connector dialog takes request headers too, so `?token=` is only a fallback |
 | Can carry your Anteater key | Yes, API Key → Bearer | Yes, server-side via `ANTEATER_API_KEY` |
-| What the model gets | 12 raw API operations, JSON | All 17 tools, formatted, plus 6 prompts and 4 resources |
+| What the model gets | 12 raw API operations, JSON | All 19 tools, formatted, plus 6 prompts and 4 resources |
 | Prerequisite / conflict checking | No — the model must reason it out | Yes |
 | Works on mobile | Yes | Yes |
 
@@ -249,7 +250,7 @@ the server negotiates down rather than echoing whatever it is sent.
 
 ## What you get
 
-### Tools (16)
+### Tools (19)
 
 **Finding classes**
 
@@ -259,6 +260,7 @@ the server negotiates down rather than echoing whatever it is sent.
 | `recommend_courses` | **The one you want.** Filter by GE, days, time window and open seats; rank by historical GPA |
 | `search_courses` | What courses exist at all |
 | `get_course` | One course in full: description, prerequisites, restrictions, what it unlocks |
+| `get_courses_batch` | Up to 50 known courses in one compact comparison, with optional details |
 | `list_terms` | Which quarters have data, plus the academic calendar |
 | `list_departments` | Department codes (`CS` resolves to `COMPSCI`) |
 
@@ -285,14 +287,15 @@ the server negotiates down rather than echoing whatever it is sent.
 | Tool | What it answers |
 |---|---|
 | `get_program_requirements` | Degree requirement trees, including university-wide GE |
+| `check_degree_progress` | Deterministic progress check from completed courses and AP scores; keeps uncertain rules visibly unverified |
 | `list_programs` | Majors, minors, specializations |
 | `get_sample_program` | The catalogue's recommended quarter-by-quarter sequence |
 
-Four of these compute things the upstream API does not provide: prerequisite-tree
+Five of these compute things the upstream API does not provide: prerequisite-tree
 evaluation, schedule conflict detection, the join between the live schedule and
-historical grade data, and AP-grant rendering.
+historical grade data, AP-grant rendering, and deterministic degree-progress evaluation.
 
-All 17 are annotated `readOnlyHint: true` — nothing here mutates anything.
+All 19 are annotated `readOnlyHint: true` — nothing here mutates anything.
 
 ### Prompts (6)
 
@@ -306,7 +309,7 @@ workflow rather than a single lookup.
 | `find-easy-ge` | `term`*, `ge`*, `constraints` | Finds a GE that fits your schedule and grades well |
 | `check-my-schedule` | `term`*, `sections`* | Validates section codes for conflicts, units and enrollment risk |
 | `can-i-take` | `course`*, `completed` | Checks eligibility, including AP substitutions |
-| `degree-check` | `major`*, `completed` | Compares completed work against the requirement tree |
+| `degree-check` | `major`*, `completed`, `apScores` | Runs the deterministic progress check, then plans what remains |
 
 `*` = required. Arguments named `term`, `ge`, `department`, `major` and `course` offer
 **autocomplete** through the MCP completions API.
@@ -408,7 +411,7 @@ node anteater-mcp.mjs --list-tools       # list every tool
 ## Development
 
 ```bash
-npm test                # 15 conformance tests; makes no API calls
+npm test                # 20 conformance tests; makes no API calls
 npm run test:live       # live calls; needs a key in practice
 npm ci                  # build tooling only; the shipped server has no runtime packages
 npm run build:sea       # standalone binary; requires the exact Node in .node-version

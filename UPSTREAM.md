@@ -36,15 +36,15 @@ gh api repos/icssc/anteater-api/compare/b9ba984e9aa2a8683445936dc32acbfaadf527bd
 | `/v2/rest/websoc/terms` | `list_terms`, completions | `shortName` like `2026 Fall` |
 | `/v2/rest/websoc/departments` | `list_departments`, all department resolution | `deptCode` values, some containing spaces |
 | `/v2/rest/websoc/syllabi` | `get_syllabi` | Takes `courseId`, **not** `department` + `courseNumber` |
-| `/v2/rest/courses`, `/courses/{id}` | `search_courses`, `get_course`, `check_prerequisites` | `prerequisiteTree` AND/OR/NOT shape with `prereqType` course/exam |
+| `/v2/rest/courses`, `/courses/{id}`, `/courses/batch` | `search_courses`, `get_course`, `get_courses_batch`, `check_prerequisites` | `prerequisiteTree` AND/OR/NOT shape with `prereqType` course/exam; batch accepts comma-separated `ids` |
 | `/v2/rest/search` | `search_courses` (optional) | Requires a **privileged** key; ordinary keys get 401 `not permitted` |
 | `/v2/rest/grades/aggregateByOffering`, `aggregateByCourse`, `raw`| `get_course_grades`, `get_instructor`, `recommend_courses` | `instructor` matches WebSoc's shortened form (`SHINDLER, M.`) |
 | `/v2/rest/enrollmentHistory` | `get_enrollment_history` | **Parallel arrays** (`dates`, `totalEnrolledHistory`, …), `-1` meaning untracked |
 | `/v2/rest/instructors` | `get_instructor`, instructor resolution | `shortenedNames` array |
 | `/v2/rest/calendar` | `list_terms` | `instructionStart/End`, `finalsStart/End`, `socAvailable` |
-| `/v2/rest/programs/*` | `list_programs`, `get_program_requirements` | Defaults to an old `catalogYear` unless one is passed; `ugradRequirements` needs a required `id` of `UC`/`GE`/`CHC4`/`CHC2` |
+| `/v2/rest/programs/*` | `list_programs`, `get_program_requirements`, `check_degree_progress` | Defaults to an old `catalogYear` unless one is passed; `ugradRequirements` needs a required `id` of `UC`/`GE`/`CHC4`/`CHC2` |
 | `/v2/rest/catalogue/sample-programs` | `get_sample_program` | `variations[].courses[]` keyed by `year`/`fall`/`winter`/`spring` |
-| `/v2/rest/apExams` | `get_ap_credit` | `catalogueName` matches the exam names in `prerequisiteTree` |
+| `/v2/rest/apExams` | `get_ap_credit`, `check_degree_progress` | `catalogueName` matches the exam names in `prerequisiteTree`; grants may contain AND/OR course alternatives |
 | `/v2/rest/courseMaterials` | `get_course_materials` | Needs `department` **and** `courseNumber`; collapses the three summer sessions into `Summer` |
 
 ### Endpoints deliberately not wrapped
@@ -53,7 +53,7 @@ gh api repos/icssc/anteater-api/compare/b9ba984e9aa2a8683445936dc32acbfaadf527bd
   including 2026 Fall. Worth revisiting if it starts returning data again.
 - `/v2/rest/dining/*`, `/v2/rest/libraryTraffic`, `/v2/rest/studyRooms` — real data, but
   outside a course-registration server's scope.
-- `/v2/rest/grades/options`, `/v2/rest/coursesCursor`, `/v2/rest/courses/batch`,
+- `/v2/rest/grades/options`, `/v2/rest/coursesCursor`,
   `/v2/rest/instructors/batch` — discovery and pagination helpers the tools do not need.
 
 ## Reference clients

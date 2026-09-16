@@ -8,6 +8,7 @@ const CALLS = [
   ["tools/call", { name: "search_courses", arguments: { query: "machine learning", limit: 6 } }],
   ["tools/call", { name: "search_courses", arguments: { department: "cs", courseLevel: "UpperDiv", limit: 5 } }],
   ["tools/call", { name: "get_course", arguments: { courseId: "cs 161" } }],
+  ["tools/call", { name: "get_courses_batch", arguments: { courseIds: ["cs 161", "ics 46", "MATH 2A"], include: ["prerequisites", "terms"] } }],
   ["tools/call", { name: "search_sections", arguments: { term: "2026 Fall", department: "CS", courseNumber: "161" } }],
   ["tools/call", { name: "search_sections", arguments: { term: "Fall 2026", ge: "GE-2", days: "TuTh", startAfter: "10am", availability: "OpenOnly", limit: 12 } }],
   ["tools/call", { name: "get_course_grades", arguments: { courseId: "COMPSCI 161" } }],
@@ -20,8 +21,9 @@ const CALLS = [
   ["tools/call", { name: "recommend_courses", arguments: { term: "2026 Fall", ge: "GE-2", endBefore: "5pm", limit: 10 } }],
   ["tools/call", { name: "list_programs", arguments: { filter: "computer" } }],
   ["tools/call", { name: "get_program_requirements", arguments: { programId: "BS-201" } }],
+  ["tools/call", { name: "check_degree_progress", arguments: { programId: "BS-201", catalogYear: "20262027", completed: ["ICS 31:A", "ICS 32:A", "ICS 33:B+", "MATH 2A"], apScores: { "AP Calc BC": 5 } } }],
   ["tools/call", { name: "get_syllabi", arguments: { courseId: "CS 161" } }],
-  ["tools/call", { name: "get_ap_credit", arguments: { exam: "Calculus BC" } }],
+  ["tools/call", { name: "get_ap_credit", arguments: { exam: "AP Calc BC" } }],
   ["tools/call", { name: "get_sample_program", arguments: { program: "Computer Science, B.S." } }],
   ["tools/call", { name: "get_sample_program", arguments: {} }],
   // regressions for the pre-publication review findings

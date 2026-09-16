@@ -85,7 +85,7 @@ await test("initialize honours a version we do implement", async () => {
 await test("every tool exposes a valid object inputSchema", async () => {
   const r = await send([{ jsonrpc: "2.0", id: 1, method: "tools/list" }]);
   const tools = r.messages[0].result.tools;
-  assert.equal(tools.length, 17);
+  assert.equal(tools.length, 19);
   for (const t of tools) {
     assert.equal(t.inputSchema.type, "object", `${t.name}: inputSchema is not an object`);
     assert.ok(t.description?.length > 40, `${t.name}: description too thin`);
@@ -149,8 +149,12 @@ await test("confusable tool pairs cross-reference each other", async () => {
   const r = await send([{ jsonrpc: "2.0", id: 1, method: "tools/list" }]);
   const byName = new Map(r.messages[0].result.tools.map((t) => [t.name, t.description]));
   const PAIRS = [
+    ["get_course", "get_courses_batch"],
+    ["get_courses_batch", "get_course"],
     ["get_course_grades", "get_instructor"],
     ["get_instructor", "get_course_grades"],
+    ["get_program_requirements", "check_degree_progress"],
+    ["check_degree_progress", "get_program_requirements"],
     ["get_sample_program", "get_program_requirements"],
     ["get_program_requirements", "get_sample_program"],
   ];
@@ -204,6 +208,87 @@ await test("completions work offline and stay within the 100-value cap", async (
   assert.ok(ge.values.length <= 100);
   // An argument with no completion source must return empty, not error.
   assert.deepEqual(r.messages.find((m) => m.id === 2).result.completion.values, []);
+});
+
+await test("batch course lookup rejects malformed requests before making API calls", async () => {
+  const r = await send([
+    { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_courses_batch", arguments: { courseIds: [] } } },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "get_courses_batch", arguments: { courseIds: Array(51).fill("ICS 31") } } },
+    { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "get_courses_batch", arguments: { courseIds: ["ICS 31"], include: ["everything"] } } },
+  ]);
+  for (const id of [1, 2, 3]) assert.equal(r.messages.find((m) => m.id === id).result.isError, true);
+  assert.match(r.messages.find((m) => m.id === 1).result.content[0].text, /at least one course/);
+  assert.match(r.messages.find((m) => m.id === 2).result.content[0].text, /at most 50/);
+  assert.match(r.messages.find((m) => m.id === 3).result.content[0].text, /Unknown include field/);
+});
+
+await test("AP exam matching handles common abbreviations without dependencies", async () => {
+  const src = await import("node:fs").then((fs) => fs.promises.readFile("anteater-mcp.mjs", "utf8"));
+  const block = src.slice(src.indexOf("const AP_TOKEN_ALIASES = "), src.indexOf("/* -- 17. get_ap_credit"));
+  const helpers = await import(
+    `data:text/javascript,${encodeURIComponent(block + "\nexport { normalizeExamQuery, rankExamMatches };")}`
+  );
+  assert.equal(helpers.normalizeExamQuery("AP Calc BC"), "CALCULUS BC");
+  assert.equal(helpers.normalizeExamQuery("comp sci principles"), "COMPUTER SCIENCE PRINCIPLES");
+  const exams = [
+    { fullName: "AP Calculus AB", catalogueName: "AP CALCULUS AB" },
+    { fullName: "AP Calculus BC", catalogueName: "AP CALCULUS BC" },
+    { fullName: "AP Computer Science Principles", catalogueName: "AP COMP SCI PRINCIPLES" },
+  ];
+  assert.equal(helpers.rankExamMatches(exams, "AP Calc BC")[0].exam.fullName, "AP Calculus BC");
+  assert.equal(helpers.rankExamMatches(exams, "Comp Sci Principles")[0].score, 100);
+});
+
+await test("degree evaluation preserves AP alternatives and never treats unknowns as complete", async () => {
+  const src = await import("node:fs").then((fs) => fs.promises.readFile("anteater-mcp.mjs", "utf8"));
+  const block = src.slice(src.indexOf("const normalizeCourseKey = "), src.indexOf("function findApExam"));
+  const helpers = await import(
+    `data:text/javascript,${encodeURIComponent("class ApiError extends Error {}\n" + block + "\nexport { parseCompletedCourseEntry, grantCourseAlternatives, evaluateDegreeRequirement, evaluateDegreeBlock };")}`
+  );
+
+  assert.equal(helpers.parseCompletedCourseEntry("ICS 31:A-").passing, true);
+  assert.equal(helpers.parseCompletedCourseEntry("ICS 31:F").passing, false);
+  assert.equal(helpers.parseCompletedCourseEntry("ICS 31:NP").passing, false);
+  assert.throws(() => helpers.parseCompletedCourseEntry("ICS 31:W"), /Unrecognized grade/);
+
+  const alternatives = helpers.grantCourseAlternatives({
+    OR: [
+      { AND: ["MATH 2A", "MATH 2B"] },
+      { AND: ["MATH 5A", "MATH 5B"] },
+    ],
+  }).map((set) => [...set].sort());
+  assert.deepEqual(alternatives, [["MATH2A", "MATH2B"], ["MATH5A", "MATH5B"]]);
+
+  const partial = helpers.evaluateDegreeRequirement(
+    { label: "Choose two", requirementType: "Course", courseCount: 2, courses: ["A 1", "B 1", "C 1"] },
+    new Set(["A1"]),
+  );
+  assert.equal(partial.status, "partial");
+  assert.equal(partial.progress, 0.5);
+
+  const ge = helpers.evaluateDegreeRequirement(
+    { label: "3 courses category II", requirementType: "Course", courseCount: 3, courses: ["BIO SCI 1", "CHEM 1A"] },
+    new Set(["BIOSCI1"]),
+    { "GE-2": 1 },
+    "GE",
+  );
+  assert.equal(ge.count, 2, "AP GE credit was not counted");
+  assert.equal(ge.status, "partial");
+
+  const blockResult = helpers.evaluateDegreeBlock({
+    id: "UC",
+    requirements: [{ label: "Entry-level writing", requirementType: "Marker" }],
+  }, new Set());
+  assert.equal(blockResult.status, "unknown", "a manual requirement was reported as satisfied");
+
+  const invalid = await send([
+    { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "check_degree_progress", arguments: { programId: "BS-201", completed: "ICS 31" } } },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "check_degree_progress", arguments: { programId: "BS-201", apScores: [] } } },
+  ]);
+  assert.equal(invalid.messages.find((m) => m.id === 1).result.isError, true);
+  assert.match(invalid.messages.find((m) => m.id === 1).result.content[0].text, /completed must be an array/);
+  assert.equal(invalid.messages.find((m) => m.id === 2).result.isError, true);
+  assert.match(invalid.messages.find((m) => m.id === 2).result.content[0].text, /apScores must be an object/);
 });
 
 await test("HTTP transport enforces the token when one is set", async () => {
