@@ -76,7 +76,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Use `ANTEATER_MCP_IMAGE_TAG=v0.0.8` in `.env` to pin an immutable release instead of
+Use `ANTEATER_MCP_IMAGE_TAG=v0.0.9` in `.env` to pin an immutable release instead of
 tracking `latest`. Continue at [Put it behind TLS](#5-put-it-behind-tls) to expose it safely.
 If the first pull asks you to authenticate, the repository owner has not yet changed the
 new GHCR package from its initial private visibility to **Public**.
@@ -104,7 +104,7 @@ For that to take effect, `compose.yaml` reads `ANTEATER_MCP_IMAGE`; set
 
 ```bash
 npm run check:version          # package.json and the server must agree
-git tag v0.0.8 && git push origin v0.0.8
+git tag v0.0.9 && git push origin v0.0.9
 ```
 
 The release workflow validates the tag against the package version, rebuilds the test
