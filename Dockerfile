@@ -6,7 +6,8 @@ FROM node:24.21.0-alpine3.23@sha256:159fe64649038c30f8cc1ec4be3af3a6e93e3648678c
 
 ARG VERSION=dev
 ARG VCS_REF=unknown
-LABEL org.opencontainers.image.title="Anteater MCP" \
+LABEL io.modelcontextprotocol.server.name="io.github.KKazuhaK/anteater-mcp" \
+      org.opencontainers.image.title="Anteater MCP" \
       org.opencontainers.image.description="MCP server for UCI course search and registration planning" \
       org.opencontainers.image.url="https://github.com/KKazuhaK/Anteater-MCP" \
       org.opencontainers.image.source="https://github.com/KKazuhaK/Anteater-MCP" \

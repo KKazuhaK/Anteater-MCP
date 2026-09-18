@@ -3,7 +3,7 @@
   "name": "io.github.KKazuhaK/anteater-mcp",
   "title": "Anteater MCP",
   "description": "UCI course search and registration planning: live sections, grades, prerequisites, conflicts.",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "websiteUrl": "https://github.com/KKazuhaK/Anteater-MCP#readme",
   "repository": {
     "url": "https://github.com/KKazuhaK/Anteater-MCP",
@@ -12,7 +12,7 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/kkazuhak/anteater-mcp:v0.0.9",
+      "identifier": "ghcr.io/kkazuhak/anteater-mcp:v0.0.10",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:8787/mcp"

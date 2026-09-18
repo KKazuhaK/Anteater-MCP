@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const packageLock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
+const serverJson = JSON.parse(await readFile(new URL("../server.json", import.meta.url), "utf8"));
 const source = await readFile(new URL("../anteater-mcp.mjs", import.meta.url), "utf8");
 const nodeVersion = (await readFile(new URL("../.node-version", import.meta.url), "utf8")).trim();
 const dockerfile = await readFile(new URL("../Dockerfile", import.meta.url), "utf8");
@@ -70,10 +71,15 @@ const dockerSource = dockerfile.match(/org\.opencontainers\.image\.source="([^"]
 if (dockerSource !== repoUrl) {
   throw new Error(`Dockerfile image.source label does not match: ${dockerSource || "missing"}`);
 }
+const dockerServerName = dockerfile.match(/io\.modelcontextprotocol\.server\.name="([^"]+)"/)?.[1];
+if (dockerServerName !== serverJson.name) {
+  throw new Error(
+    `Dockerfile MCP server label does not match: ${dockerServerName || "missing"}; expected ${serverJson.name}`,
+  );
+}
 
 // server.json is what the MCP registry publishes. A stale version here would
 // advertise a release that does not match the image it names.
-const serverJson = JSON.parse(await readFile(new URL("../server.json", import.meta.url), "utf8"));
 if (serverJson.version !== packageJson.version) {
   throw new Error(`Version mismatch: package.json=${packageJson.version}, server.json=${serverJson.version}`);
 }
