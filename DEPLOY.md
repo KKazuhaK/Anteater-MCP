@@ -103,14 +103,34 @@ For that to take effect, `compose.yaml` reads `ANTEATER_MCP_IMAGE`; set
 ### Cutting the release that produces the image
 
 ```bash
-npm run check:version          # package.json and the server must agree
-git tag v0.0.9 && git push origin v0.0.9
+npm run check:version
+git tag v0.0.11 && git push origin v0.0.11    # v + the version in package.json
 ```
 
-The release workflow validates the tag against the package version, rebuilds the test
-gates, produces the standalone binaries, and pushes the container image. Afterwards, make
-the new GHCR package **Public** in the repository's package settings — it is private by
-default, and a private package is why a first pull would ask you to log in.
+The workflow then runs in a fixed order, and nothing becomes publicly visible until the
+steps that can still fail have passed:
+
+1. **validate** — the tag matches the version, the release gates pass, and the MCP
+   registry's own validator accepts `server.json`.
+2. **binaries** and **image** — the six standalone binaries are built and smoke-tested,
+   and the multi-platform image is pushed to GHCR. The pushed image is then pulled back
+   and its labels are checked against `server.json`, because the registry reads the MCP
+   server name out of the image config and rejects the package without it.
+3. **stage** — the GitHub release is created as a **draft**, with every asset attached.
+4. **registry** — the entry is published to the MCP registry. The registry never
+   replaces a published version, so a re-run notices this version is already registered
+   and carries on instead of failing.
+5. **promote** — `latest` and `beta` are pointed at the new image, and only then is the
+   draft release made public.
+
+A failure before step 5 leaves a draft release and a pushed image tag and nothing else,
+so re-running the workflow finishes the release instead of needing a new tag. The same
+ordering is why `io.modelcontextprotocol.server.name` is asserted in CI on the image CI
+builds: a missing label used to be discovered at step 4, by which point the image and
+the release were already live.
+
+Afterwards, make the new GHCR package **Public** in the repository's package settings —
+it is private by default, and a private package is why a first pull would ask you to log in.
 
 ## 3. Install manually on the server
 

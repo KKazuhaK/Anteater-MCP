@@ -11,6 +11,21 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# Ordering rule for this pipeline: nothing the outside world can see happens until
+# everything that can still fail has passed.
+#
+#   validate ─┬─ binaries ── package ──┐
+#             │                        ├─ stage    draft release, nothing public
+#             ├─ image ────────────────┼─ registry MCP registry entry
+#             │                        │
+#             └────────────────────────┴─ promote  rolling tags, release goes public
+#
+# The MCP registry validates the entry against the image that has actually been
+# pushed, and rejects entries in ways a local check cannot fully predict. 0.0.7,
+# 0.0.8 and 0.0.9 each failed there after the image and the GitHub release were
+# already public, which burned the version and forced another tag every time.
+# With promote last, the worst case is a draft release and a pushed image tag,
+# and re-running the workflow finishes the release.
 jobs:
   validate:
     name: Validate release tag
@@ -166,43 +181,22 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  publish:
-    name: Publish GHCR image and GitHub Release
-    needs: [validate, package]
+  image:
+    name: Publish the container image
+    needs: validate
     runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
     permissions:
-      contents: write
+      contents: read
       packages: write
       attestations: write
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          name: release-assets
-          path: dist
-      - name: Create or refresh draft release
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
-          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
-          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
-          IMAGE: ${{ needs.validate.outputs.image }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if gh release view "${RELEASE_TAG}" --json isDraft --jq .isDraft >/tmp/is-draft 2>/dev/null; then
-            test "$(cat /tmp/is-draft)" = true || { echo "release is already public" >&2; exit 1; }
-            gh release upload "${RELEASE_TAG}" dist/* --clobber
-          else
-            # Literal backticks are Markdown, not shell command substitution.
-            # shellcheck disable=SC2016
-            notes=$(printf 'Container image: `%s:%s`\n\nVerify downloads with `sha256sum -c SHA256SUMS.txt`.' \
-              "${IMAGE}" "${RELEASE_TAG}")
-            args=("${RELEASE_TAG}" dist/* --draft --verify-tag --title "${RELEASE_TAG}" \
-              --generate-notes --notes "${notes}")
-            [[ "${PRERELEASE}" == true ]] && args+=(--prerelease)
-            gh release create "${args[@]}"
-          fi
+          node-version-file: .node-version
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -234,44 +228,71 @@ jobs:
           subject-name: ${{ needs.validate.outputs.image }}
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
-      - name: Promote rolling image channels
+      - name: Verify the image that was actually pushed
         env:
           IMAGE: ${{ needs.validate.outputs.image }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
-          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          VERSION: ${{ needs.validate.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
-          source_ref="${IMAGE}@${{ steps.image.outputs.digest }}"
-          docker buildx imagetools create --tag "${IMAGE}:beta" "${source_ref}"
-          if [[ "${PRERELEASE}" == false ]]; then
-            docker buildx imagetools create --tag "${IMAGE}:latest" "${source_ref}"
-          fi
-      - name: Publish the verified draft
+          # The registry reads the annotations out of the image config of the image it
+          # pulls, so read them from there too rather than from the Dockerfile they
+          # came from. A label that survives the build but not the push is exactly the
+          # failure this catches, and it catches it before anything is advertised.
+          docker pull --platform linux/amd64 "${IMAGE}:${RELEASE_TAG}"
+          node scripts/check-image.mjs "${IMAGE}:${RELEASE_TAG}" "${VERSION}"
+
+  stage:
+    name: Stage the GitHub Release
+    needs: [validate, package]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-assets
+          path: dist
+      - name: Create or refresh draft release
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          IMAGE: ${{ needs.validate.outputs.image }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${PRERELEASE}" == true ]]; then
-            gh release edit "${RELEASE_TAG}" --draft=false --prerelease
+          if gh release view "${RELEASE_TAG}" --json isDraft --jq .isDraft >/tmp/is-draft 2>/dev/null; then
+            test "$(cat /tmp/is-draft)" = true || { echo "release is already public" >&2; exit 1; }
+            gh release upload "${RELEASE_TAG}" dist/* --clobber
           else
-            gh release edit "${RELEASE_TAG}" --draft=false --latest
+            # Literal backticks are Markdown, not shell command substitution.
+            # shellcheck disable=SC2016
+            notes=$(printf 'Container image: `%s:%s`\n\nVerify downloads with `sha256sum -c SHA256SUMS.txt`.' \
+              "${IMAGE}" "${RELEASE_TAG}")
+            args=("${RELEASE_TAG}" dist/* --draft --verify-tag --title "${RELEASE_TAG}" \
+              --generate-notes --notes "${notes}")
+            [[ "${PRERELEASE}" == true ]] && args+=(--prerelease)
+            gh release create "${args[@]}"
           fi
 
   registry:
     name: Publish to the MCP Registry
-    # Runs last: the registry entry names an OCI image, so that image has to exist
-    # and the release has to be live before anything advertises them.
-    needs: [validate, publish]
+    # Needs the image to exist, because the registry validates the entry against the
+    # image it can pull. Does not need the GitHub release to be public: the entry
+    # names the repository and the image, not the release.
+    needs: [validate, image]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write # github-oidc login, so no token is stored anywhere
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
 
       - name: Confirm server.json matches the tag
         env:
@@ -291,5 +312,60 @@ jobs:
       - name: Authenticate
         run: ./mcp-publisher login github-oidc
 
-      - name: Publish
-        run: ./mcp-publisher publish
+      - name: Publish, unless this version is already registered
+        # The registry never replaces a published version, so a re-run of a release
+        # that got this far would otherwise fail here forever. check-registry.mjs
+        # separates "already published, same image" (exit 3, nothing to do) from
+        # "published against a different image" (exit 1, stop).
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-registry.mjs && status=0 || status=$?
+          case "${status}" in
+            0) ./mcp-publisher publish ;;
+            3) echo "already registered, nothing to publish" ;;
+            *) exit "${status}" ;;
+          esac
+
+  promote:
+    name: Promote the release
+    # The only job that makes anything public, and it runs last.
+    needs: [validate, image, stage, registry]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote rolling image channels
+        env:
+          IMAGE: ${{ needs.validate.outputs.image }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_ref="${IMAGE}@${DIGEST}"
+          docker buildx imagetools create --tag "${IMAGE}:beta" "${source_ref}"
+          if [[ "${PRERELEASE}" == false ]]; then
+            docker buildx imagetools create --tag "${IMAGE}:latest" "${source_ref}"
+          fi
+      - name: Publish the verified draft
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${PRERELEASE}" == true ]]; then
+            gh release edit "${RELEASE_TAG}" --draft=false --prerelease
+          else
+            gh release edit "${RELEASE_TAG}" --draft=false --latest
+          fi

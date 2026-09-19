@@ -44,6 +44,8 @@
     "tools": "node anteater-mcp.mjs --list-tools",
     "build:sea": "node scripts/build-sea.mjs",
     "check:version": "node scripts/check-version.mjs",
+    "check:image": "node scripts/check-image.mjs",
+    "check:registry": "node scripts/check-registry.mjs",
     "test": "npm run test:offline",
     "test:offline": "node test-offline.mjs",
     "test:live": "node test.mjs"

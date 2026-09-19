@@ -12,6 +12,14 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # A Node major has to move .node-version, package.json (engines and
+      # packageManager) and the Dockerfile base image together — scripts/check-version.mjs
+      # fails the build when they disagree. Dependabot can only edit the Dockerfile, so
+      # it can never open a PR that passes and every one it opens is born red. Upgrade
+      # Node as one coordinated change instead.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /

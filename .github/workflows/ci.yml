@@ -95,6 +95,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build image
         run: docker build --build-arg VERSION=ci --build-arg VCS_REF="${GITHUB_SHA}" -t anteater-mcp:ci .
+      - name: Assert the labels the MCP registry requires
+        # The registry reads io.modelcontextprotocol.server.name out of the image
+        # config and rejects the package without it. That rejection used to surface
+        # only at the end of a release, after the image and the GitHub release were
+        # live, which forced a new tag each time (0.0.7 through 0.0.9). The image is
+        # built right here, so assert it here.
+        run: node scripts/check-image.mjs anteater-mcp:ci
       - name: Exercise image
         shell: bash
         run: |
