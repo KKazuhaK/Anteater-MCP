@@ -46,7 +46,7 @@ const MCP_TOKEN = process.env.ANTEATER_MCP_TOKEN || "";
 const SOURCE_URL = "https://github.com/KKazuhaK/Anteater-MCP";
 
 // check-version.mjs parses this exact line and requires it to match package.json.
-const SERVER_INFO = { name: "anteater-mcp", version: "0.0.10" };
+const SERVER_INFO = { name: "anteater-mcp", version: "1.0.0-beta.1" };
 const UA = `${SERVER_INFO.name}/${SERVER_INFO.version} (+${SOURCE_URL})`;
 const PROTOCOL_VERSION = "2025-06-18";
 const SUPPORTED_PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
