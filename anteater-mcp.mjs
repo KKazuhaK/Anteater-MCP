@@ -29,12 +29,16 @@
  */
 
 import http from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import net from "node:net";
 import process from "node:process";
 
 const BASE = process.env.ANTEATER_API_BASE || "https://anteaterapi.com";
 const API_KEY = process.env.ANTEATER_API_KEY || "";
+const upstreamCredentials = new AsyncLocalStorage();
+const cacheSecret = randomBytes(32);
+const currentApiKey = () => upstreamCredentials.getStore() ?? API_KEY;
 // Zotcourse is an independent WebSoc-backed source. It is used only when the
 // primary Anteater web-schedule request fails; set this to "off" to disable it.
 const ZOTCOURSE_BASE = process.env.ZOTCOURSE_API_BASE === "off"
@@ -46,7 +50,7 @@ const MCP_TOKEN = process.env.ANTEATER_MCP_TOKEN || "";
 const SOURCE_URL = "https://github.com/KKazuhaK/Anteater-MCP";
 
 // check-version.mjs parses this exact line and requires it to match package.json.
-const SERVER_INFO = { name: "anteater-mcp", version: "1.0.0-beta.1" };
+const SERVER_INFO = { name: "anteater-mcp", version: "1.0.0-beta.2" };
 const UA = `${SERVER_INFO.name}/${SERVER_INFO.version} (+${SOURCE_URL})`;
 const PROTOCOL_VERSION = "2025-06-18";
 const SUPPORTED_PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -86,11 +90,14 @@ async function api(path, params = {}, ttl = 10 * 60 * 1000) {
   }
   const url = `${BASE}${path}${qs.toString() ? `?${qs}` : ""}`;
 
-  const cached = cacheGet(url);
+  // Keep cached upstream results separate for each credential, including public mode.
+  const apiKey = currentApiKey();
+  const cacheKey = createHmac("sha256", cacheSecret).update(apiKey).digest("hex") + ":" + url;
+  const cached = cacheGet(cacheKey);
   if (cached !== undefined) return cached;
 
   const headers = { "User-Agent": UA, Accept: "application/json" };
-  if (API_KEY) headers.Authorization = `Bearer ${API_KEY}`;
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
   let res;
   try {
@@ -119,7 +126,7 @@ async function api(path, params = {}, ttl = 10 * 60 * 1000) {
   }
 
   const data = body.data;
-  cacheSet(url, data, ttl);
+  cacheSet(cacheKey, data, ttl);
   return data;
 }
 
@@ -445,10 +452,8 @@ function parseTerm(term) {
   return { year, quarter };
 }
 
-let _deptCache = null;
 async function departments() {
-  if (!_deptCache) _deptCache = await api("/v2/rest/websoc/departments", {}, 24 * 3600 * 1000);
-  return _deptCache;
+  return api("/v2/rest/websoc/departments", {}, 24 * 3600 * 1000);
 }
 
 // Codes students say vs. codes WebSoc uses.
@@ -3840,7 +3845,7 @@ function runHttp(port, host) {
       "Access-Control-Allow-Origin": origin || "null",
       Vary: "Origin",
       "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Anteater-Api-Key, Mcp-Session-Id, MCP-Protocol-Version",
       "Access-Control-Expose-Headers": "Mcp-Session-Id",
       // Query-string credentials are a compatibility fallback. Never let an
       // intermediary cache a response associated with one.
@@ -3880,6 +3885,17 @@ function runHttp(port, host) {
         return;
       }
     }
+
+    // A personal upstream key never replaces the transport access token.
+    const personalKey = req.headers["x-anteater-api-key"];
+    if (personalKey !== undefined && (
+      typeof personalKey !== "string" || !personalKey.trim() ||
+      personalKey.includes(",") || personalKey.length > 8192
+    )) {
+      return res.writeHead(400, { ...CORS, "Content-Type": "text/plain" })
+        .end("Invalid X-Anteater-Api-Key header");
+    }
+    const requestApiKey = personalKey === undefined ? API_KEY : personalKey.trim();
 
     if (path === "/health") {
       return res.writeHead(200, { ...CORS, "Content-Type": "application/json" })
@@ -3930,7 +3946,7 @@ function runHttp(port, host) {
         if (size > 2e6) { aborted = true; res.writeHead(413, CORS).end(); req.destroy(); return; }
         chunks.push(c);
       });
-      req.on("end", async () => {
+      req.on("end", () => upstreamCredentials.run(requestApiKey, async () => {
         if (aborted) return;
         const raw = Buffer.concat(chunks).toString("utf8").trim();
         let args;
@@ -3955,7 +3971,7 @@ function runHttp(port, host) {
           res.writeHead(200, { ...CORS, "Content-Type": "application/json" })
             .end(JSON.stringify({ result: `Error: ${message}`, isError: true }));
         }
-      });
+      }));
       return;
     }
 
@@ -3987,7 +4003,7 @@ function runHttp(port, host) {
       if (size > 2e6) { aborted = true; res.writeHead(413, CORS).end(); req.destroy(); return; }
       chunks.push(c);
     });
-    req.on("end", async () => {
+    req.on("end", () => upstreamCredentials.run(requestApiKey, async () => {
       if (aborted) return;
       const body = Buffer.concat(chunks).toString("utf8");
       let msg;
@@ -4021,7 +4037,7 @@ function runHttp(port, host) {
         return res.end();
       }
       res.writeHead(200, { ...CORS, "Content-Type": "application/json" }).end(JSON.stringify(payload));
-    });
+    }));
   });
 
   server.listen(port, host, () => {

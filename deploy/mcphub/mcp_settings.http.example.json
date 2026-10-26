@@ -1,0 +1,31 @@
+{
+  "mcpServers": {
+    "anteater-shared": {
+      "type": "streamable-http",
+      "protocolNegotiation": "legacy",
+      "url": "https://anteater.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ANTEATER_MCP_TOKEN}"
+      },
+      "visibility": "public",
+      "owner": "admin"
+    },
+    "anteater-personal": {
+      "type": "streamable-http",
+      "protocolNegotiation": "legacy",
+      "url": "https://anteater.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ANTEATER_MCP_TOKEN}"
+      },
+      "credentialTemplate": [
+        {
+          "target": "headers",
+          "name": "X-Anteater-Api-Key",
+          "label": "Personal Anteater API secret key"
+        }
+      ],
+      "visibility": "public",
+      "owner": "admin"
+    }
+  }
+}

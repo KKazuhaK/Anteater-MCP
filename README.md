@@ -1,5 +1,10 @@
 # Anteater MCP
 
+Release **1.0.0-beta.2** adds separate personal/shared MCPHub setup and optional
+per-request upstream keys for HTTP hosting, with credential-isolated caches.
+The shared service still supports anonymous upstream quota when no key is set.
+
+
 An MCP server that lets Claude and ChatGPT help you pick classes at UC Irvine.
 
 It wraps [Anteater API](https://icssc.link/about-anteaterapi) — UCI's course catalogue,
@@ -357,6 +362,27 @@ set -a; . ./.env; set +a # load it without echoing the value
 ```
 
 `.env` is gitignored. Never paste a key into an issue, PR or screenshot.
+
+### Shared and personal upstream keys (MCPHub)
+
+For direct execution inside MCPHub, import the stdio configuration in
+[the MCPHub guide](deploy/mcphub/README.md). Each user can bind a personal key,
+and a separate shared entry uses the public/default key. No independent Anteater
+container is required. The following header mechanism is for HTTP deployments.
+
+HTTP calls can use either the deployment's shared `ANTEATER_API_KEY` or a personal
+key sent as `X-Anteater-Api-Key`. The personal header takes precedence for that
+request, including all of its concurrent upstream calls. If the header is absent,
+the shared key is used (or anonymous upstream access if no shared key is configured).
+A blank or ambiguous personal header is rejected; an invalid personal key never
+retries with the shared key. Anteater API caches are separated by credential.
+
+`Authorization: Bearer <ANTEATER_MCP_TOKEN>` still authenticates access to this
+server. It is independent of the upstream API key and is required for both modes
+when configured. Personal keys belong in headers, never URL query parameters.
+
+See [MCPHub setup](deploy/mcphub/README.md) for separate Shared and Personal server
+entries. Personal entries require a binding; Shared remains available without one.
 
 ### Environment variables
 

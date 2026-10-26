@@ -355,6 +355,76 @@ await test("HTTP transport enforces the token when one is set", async () => {
   }
 });
 
+await test("HTTP personal keys isolate concurrent calls and caches from the shared key", async () => {
+  const { createServer } = await import("node:http");
+  const { once } = await import("node:events");
+  const seen = [];
+  const upstream = createServer(async (req, res) => {
+    const key = req.headers.authorization;
+    seen.push(key);
+    // Interleave requests to expose process-global credential swaps.
+    await new Promise((resolve) => setTimeout(resolve, key === "Bearer alice" ? 40 : 5));
+    res.setHeader("Content-Type", "application/json");
+    if (key === "Bearer invalid") {
+      res.writeHead(401).end(JSON.stringify({ ok: false, message: "Invalid key" }));
+    } else {
+      res.end(JSON.stringify({ ok: true, data: [{ deptCode: "TEST", deptName: key }] }));
+    }
+  });
+  upstream.listen(0, "127.0.0.1");
+  await once(upstream, "listening");
+  const port = 8935;
+  const srv = spawn("node", ["anteater-mcp.mjs", "--http", "--port", String(port)], {
+    stdio: ["ignore", "ignore", "pipe"],
+    env: { ...process.env, ANTEATER_API_BASE: `http://127.0.0.1:${upstream.address().port}`,
+      ANTEATER_API_KEY: "shared", ANTEATER_MCP_TOKEN: "transport-secret" },
+  });
+  let stderr = "";
+  srv.stderr.on("data", (d) => { stderr += d; });
+  const call = async (key, rest = false, authenticated = true) => {
+    const response = await fetch(`http://127.0.0.1:${port}${rest ? "/tools/list_departments" : "/mcp"}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json",
+        ...(authenticated ? { Authorization: "Bearer transport-secret" } : {}),
+        ...(key === undefined ? {} : { "X-Anteater-Api-Key": key }) },
+      body: JSON.stringify(rest ? {} : { jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: { name: "list_departments", arguments: {} } }),
+    });
+    return { status: response.status, text: await response.text() };
+  };
+  try {
+    let ready = false;
+    for (let i = 0; i < 50; i++) {
+      try { await fetch(`http://127.0.0.1:${port}/health`); ready = true; break; }
+      catch { await new Promise((r) => setTimeout(r, 100)); }
+    }
+    assert.ok(ready, "HTTP server did not start");
+    const results = await Promise.all([call("alice"), call("bob", true), call(undefined)]);
+    for (const [i, key] of ["alice", "bob", "shared"].entries()) {
+      assert.equal(results[i].status, 200);
+      assert.ok(results[i].text.includes(`Bearer ${key}`), `wrong credential for ${key}`);
+    }
+    assert.deepEqual(seen.slice().sort(), ["Bearer alice", "Bearer bob", "Bearer shared"]);
+    await Promise.all([call("alice", true), call("bob"), call(undefined, true)]);
+    assert.equal(seen.length, 3, "credential-scoped cache was not reused");
+    const invalid = await call("invalid");
+    assert.ok(invalid.text.includes("isError"));
+    assert.equal(seen.at(-1), "Bearer invalid");
+    assert.equal(seen.length, 4, "invalid personal key fell back to shared key");
+    assert.equal((await call("alice", false, false)).status, 401, "personal key bypassed transport auth");
+    assert.equal((await call("")).status, 400, "blank personal key silently selected shared mode");
+    assert.equal((await call("alice,bob")).status, 400, "ambiguous personal header accepted");
+    assert.equal(seen.length, 4, "rejected calls reached upstream");
+    for (const key of ["alice", "bob", "shared", "invalid", "transport-secret"]) {
+      assert.ok(!stderr.includes(key), "a credential was logged");
+    }
+  } finally {
+    srv.kill();
+    await once(srv, "close");
+    await new Promise((resolve) => upstream.close(resolve));
+  }
+});
+
 await test("REST facade mirrors the MCP tools and generates a usable OpenAPI document", async () => {
   const { spawn: sp } = await import("node:child_process");
   const token = "offline-rest-token-0123456789";
@@ -479,7 +549,7 @@ await test("forwarded headers are believed only from a trusted proxy", async () 
 
 await test("term parsing reaches all six quarters", async () => {
   const src = await import("node:fs").then((fs) => fs.promises.readFile("anteater-mcp.mjs", "utf8"));
-  const block = src.slice(src.indexOf("const QUARTERS = "), src.indexOf("let _deptCache"));
+  const block = src.slice(src.indexOf("const QUARTERS = "), src.indexOf("async function departments()"));
   const { parseTerm } = await import(
     `data:text/javascript,${encodeURIComponent(
       block.replace(/throw new ApiError/g, "throw new Error") + "\nexport { parseTerm };",
