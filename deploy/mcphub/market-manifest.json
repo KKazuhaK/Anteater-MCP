@@ -1,0 +1,55 @@
+{
+  "name": "anteater-mcp",
+  "display_name": "Anteater MCP",
+  "description": "UCI course discovery and degree planning using Anteater API. Not an official UCI service. Runs over stdio; includes Node 24 in the launch command.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KKazuhaK/Anteater-MCP"
+  },
+  "homepage": "https://github.com/KKazuhaK/Anteater-MCP",
+  "author": {
+    "name": "Kazuha Mo"
+  },
+  "license": "AGPL-3.0-or-later",
+  "categories": [
+    "Productivity",
+    "Knowledge Base"
+  ],
+  "tags": [
+    "uci",
+    "courses",
+    "education",
+    "anteater"
+  ],
+  "installations": {
+    "npm": {
+      "type": "npm",
+      "command": "npx",
+      "args": [
+        "--yes",
+        "--package=https://codeload.github.com/KKazuhaK/Anteater-MCP/tar.gz/v1.0.0-beta.2",
+        "--package=node@24.21.0",
+        "--",
+        "anteater-mcp"
+      ],
+      "env": {
+        "ANTEATER_API_KEY": "${ANTEATER_API_KEY}"
+      }
+    }
+  },
+  "arguments": {
+    "ANTEATER_API_KEY": {
+      "description": "Optional Anteater API secret key. Empty uses anonymous quota. Use separate shared and personal Hub entries for a team.",
+      "required": false,
+      "example": ""
+    }
+  },
+  "examples": [
+    {
+      "title": "Course discovery",
+      "description": "Search the UCI course catalogue.",
+      "prompt": "Find UCI courses about machine learning."
+    }
+  ],
+  "is_official": false
+}

@@ -1,0 +1,7 @@
+# Run with the repository-root compose.yaml as the first file.
+services:
+  server:
+    image: anteater-mcp:mcphub-local
+    pull_policy: never
+    build:
+      context: .
