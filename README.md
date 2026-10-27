@@ -389,6 +389,7 @@ entries. Personal entries require a binding; Shared remains available without on
 | Variable | Purpose |
 |---|---|
 | `ANTEATER_API_KEY` | Your secret key. See above. |
+| `ANTEATER_API_KEY_SCOPE` | `operator` (default) or `user`. Says whose key `ANTEATER_API_KEY` is, which decides how its rejection is reported (see [Errors](#errors)). Set `user` when each user's own key is injected as the environment, one process per user. A key sent in `X-Anteater-Api-Key` is always the user's. |
 | `ANTEATER_API_BASE` | Defaults to `https://anteaterapi.com`. Point at a self-hosted instance. |
 | `ZOTCOURSE_API_BASE` | Independent fallback for live WebSoc schedule queries. Defaults to `https://zotcourse.appspot.com`; set to `off` to disable. Only `search_sections`, `check_schedule` and `recommend_courses` use it, and fallback results are labelled as potentially cached. |
 | `ANTEATER_MCP_TOKEN` | HTTP mode only, and **required before you expose the server**. Clients send `Authorization: Bearer <token>`, which is preferred, or use `https://host/mcp?token=<token>` where the client accepts only a URL. Any token in a URL can land in browser history, connector settings, and proxy logs. `/health` stays open. Unset means no authentication, which is only safe on loopback. |
@@ -428,12 +429,63 @@ node anteater-mcp.mjs --list-tools       # list every tool
 
 ---
 
+## Errors
+
+A failed tool call returns `isError: true` and a single text content item holding a JSON
+object, so a client can tell a bad credential from a service outage without parsing prose:
+
+```json
+{"error": "RATE_LIMITED", "message": "Anteater API rate limit hit. Wait a moment, or set ANTEATER_API_KEY ...", "retry_after_seconds": 30}
+```
+
+| `error` | Meaning |
+|---|---|
+| `CREDENTIAL_INVALID` | The **requesting user's own** key was rejected: Anteater API answered a JSON 401 (or a JSON 403 whose body says the key is invalid) to a key sent in the `X-Anteater-Api-Key` header, or to `ANTEATER_API_KEY` when `ANTEATER_API_KEY_SCOPE=user`. |
+| `PERMISSION_DENIED` | Anteater API answered a JSON 403: the key is valid but not allowed to use that endpoint. |
+| `RATE_LIMITED` | Anteater API answered 429. `retry_after_seconds` is present only when the upstream sent `Retry-After`. |
+| `INVALID_ARGUMENT` | The tool input was wrong: a missing or malformed argument, an unknown department or term, a course that does not exist (upstream 404), or an upstream 400/422. |
+| `SOURCE_UNAVAILABLE` | Network failure, timeout, 5xx, a non-JSON reply (for example a WAF or CDN challenge page, including a non-JSON 401/403), any other unexpected fault, or **the server's own configured key being rejected** (`ANTEATER_API_KEY` with the default `operator` scope, or no key at all): the operator must fix it, not the caller. |
+
+`message` stays human-readable and is safe to show to a user; it never contains the API
+key. Codes are stable; wording is not.
+
+The REST facade (`/tools/<name>`) keeps HTTP 200 with `{"result": ..., "isError": true}` for
+a tool failure. `result` is the same JSON string as the MCP text, and a top-level
+`"error": "<CODE>"` repeats the code. Transport problems keep their HTTP status but now
+share one body shape, `{"error": "<CODE>", "message": "<text>"}`, with `error` one of
+`INVALID_ARGUMENT` (400), `UNAUTHORIZED` (401), `NOT_FOUND` (unknown tool, 404),
+`METHOD_NOT_ALLOWED` (405) or `PAYLOAD_TOO_LARGE` (413). A failing `resources/read`
+keeps JSON-RPC error `-32603` and adds `data: {"error": "<CODE>"}`. All of this is
+described in `/openapi.json`. The static `gpt-actions-openapi.json` talks to Anteater API
+directly and is unaffected.
+
+## Changes
+
+### Unreleased
+
+- **Tool failures are now structured.** The text content of an `isError` result is a JSON
+  object `{"error": CODE, "message": text}` instead of `Error: ...` prose. Codes:
+  `CREDENTIAL_INVALID`, `PERMISSION_DENIED`, `RATE_LIMITED`, `INVALID_ARGUMENT`,
+  `SOURCE_UNAVAILABLE`.
+- **REST facade `result` format change.** On failure, `/tools/<name>` still returns HTTP 200
+  with `isError: true`, but `result` is now that JSON string rather than `Error: ...` prose,
+  and a top-level `error` code is added. Transport errors (400, 401, 404, 405, 413) now
+  return `{"error": CODE, "message": text}` where some returned plain text or `{"error": text}`.
+  Match on `error`, not on the old `Error:` prefix.
+- New `ANTEATER_API_KEY_SCOPE` (`operator` default, or `user`).
+- `get_course`, `check_prerequisites` no longer report an upstream outage or rate limit as
+  "No course ...": only a real 404 does.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
 | Tools don't appear in Claude Desktop | The path must be **absolute**, and you must fully quit and reopen the app. Check the config parses: `node -e "require('./claude_desktop_config.json')"`. |
-| `Anteater API rate limit hit` | The anonymous quota is shared and replenishes hourly. Set `ANTEATER_API_KEY`. |
+| `RATE_LIMITED` (`Anteater API rate limit hit`) | The anonymous quota is shared and replenishes hourly. Set `ANTEATER_API_KEY`. |
+| `CREDENTIAL_INVALID` | Your own API key was rejected. Replace the `X-Anteater-Api-Key` header value (or your personal key binding). |
+| `SOURCE_UNAVAILABLE` saying the server's configured key was rejected | Operator: replace `ANTEATER_API_KEY`. |
 | `search_courses` returns odd results | Fuzzy search needs a privileged key that ordinary keys are not granted; it falls back to substring matching and says so. Use the structured filters instead. |
 | `Too broad` from `search_sections` | A whole term is tens of thousands of sections. Add `department`, `courseNumber`, `ge`, `instructor` or `sectionCodes`. |
 | `"2026 summer" is ambiguous` | UCI has three summer terms. Use `Summer1`, `Summer2` or `Summer10wk`. |

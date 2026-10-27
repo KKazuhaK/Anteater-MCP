@@ -425,6 +425,235 @@ await test("HTTP personal keys isolate concurrent calls and caches from the shar
   }
 });
 
+await test("tool failures carry stable error codes (mocked upstream 401, 403, 429, 500, 400)", async () => {
+  const { createServer } = await import("node:http");
+  const { once } = await import("node:events");
+  const upstream = createServer((req, res) => {
+    const key = (req.headers.authorization || "").replace(/^Bearer /, "");
+    res.setHeader("Content-Type", "application/json");
+    if (key === "bad") return res.writeHead(401).end(JSON.stringify({ ok: false, message: "Invalid key" }));
+    if (key === "forbidden") return res.writeHead(403).end(JSON.stringify({ ok: false, message: "Not permitted to access this resource" }));
+    if (key === "badkey403") return res.writeHead(403).end(JSON.stringify({ ok: false, message: "Invalid API key" }));
+    if (key === "html403") return res.writeHead(403).end("<html>Just a moment... (challenge)</html>");
+    if (req.url.includes("/courses/") && key === "c429") {
+      res.setHeader("Retry-After", "3");
+      return res.writeHead(429).end(JSON.stringify({ ok: false, message: "Slow down" }));
+    }
+    if (req.url.includes("/courses/") && key === "c404") return res.writeHead(404).end(JSON.stringify({ ok: false, message: "Course not found" }));
+    if (key === "limited") {
+      res.setHeader("Retry-After", "7");
+      return res.writeHead(429).end(JSON.stringify({ ok: false, message: "Too many requests" }));
+    }
+    if (key === "boom") return res.writeHead(500).end(JSON.stringify({ ok: false, message: "Upstream broke" }));
+    if (key === "html") return res.writeHead(502).end("<html>Bad gateway</html>");
+    if (key === "bad401html") return res.writeHead(401).end("<html>Unauthorized</html>");
+    if (key === "malformed") return res.writeHead(400).end(JSON.stringify({ ok: false, message: "Bad param" }));
+    if (key === "") return res.writeHead(401).end(JSON.stringify({ ok: false, message: "Anonymous refused" }));
+    res.end(JSON.stringify({ ok: true, data: [{ deptCode: "TEST", deptName: "Test" }] }));
+  });
+  upstream.listen(0, "127.0.0.1");
+  await once(upstream, "listening");
+  const port = 8936;
+  const srv = spawn("node", ["anteater-mcp.mjs", "--http", "--port", String(port)], {
+    stdio: ["ignore", "ignore", "ignore"],
+    env: { ...process.env, ANTEATER_API_BASE: `http://127.0.0.1:${upstream.address().port}`,
+      ANTEATER_API_KEY: "", ANTEATER_MCP_TOKEN: "" },
+  });
+  const failure = (text) => {
+    const parsed = JSON.parse(text);
+    assert.deepEqual(Object.keys(parsed).filter((k) => !["error", "message", "retry_after_seconds"].includes(k)), []);
+    assert.equal(typeof parsed.message, "string");
+    return parsed;
+  };
+  const mcp = async (key, name = "list_departments", args = {}) => {
+    const r = await (await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(key === undefined ? {} : { "X-Anteater-Api-Key": key }) },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+    })).json();
+    return r.result;
+  };
+  try {
+    for (let i = 0; i < 50; i++) {
+      try { await fetch(`http://127.0.0.1:${port}/health`); break; }
+      catch { await new Promise((r) => setTimeout(r, 100)); }
+    }
+    const ok = await mcp("good");
+    assert.equal(ok.isError, false, "success must not be flagged as an error");
+
+    let f = failure((await mcp("bad")).content[0].text);
+    assert.equal(f.error, "CREDENTIAL_INVALID");
+    assert.match(f.message, /Invalid key/);
+    assert.doesNotMatch(f.message, /Bearer/, "message must not echo credentials");
+    // A JSON 403 is a permission problem unless the body says the key itself is bad.
+    f = failure((await mcp("forbidden")).content[0].text);
+    assert.equal(f.error, "PERMISSION_DENIED");
+    assert.match(f.message, /not permitted/i);
+    assert.equal(failure((await mcp("badkey403")).content[0].text).error, "CREDENTIAL_INVALID");
+    // Challenge pages from a WAF or CDN say nothing about the key.
+    assert.equal(failure((await mcp("html403")).content[0].text).error, "SOURCE_UNAVAILABLE");
+    assert.equal(failure((await mcp("bad401html")).content[0].text).error, "SOURCE_UNAVAILABLE");
+
+    // get_course must not turn an outage or rate limit into "No course ...".
+    f = failure((await mcp("c429", "get_course", { courseId: "TEST 1" })).content[0].text);
+    assert.equal(f.error, "RATE_LIMITED");
+    assert.equal(f.retry_after_seconds, 3);
+    f = failure((await mcp("boom", "get_course", { courseId: "TEST 1" })).content[0].text);
+    assert.equal(f.error, "SOURCE_UNAVAILABLE");
+    f = failure((await mcp("c404", "get_course", { courseId: "TEST 1" })).content[0].text);
+    assert.equal(f.error, "INVALID_ARGUMENT");
+    assert.match(f.message, /No course/);
+    f = failure((await mcp("c429", "check_prerequisites", { courseId: "TEST 1" })).content[0].text);
+    assert.equal(f.error, "RATE_LIMITED");
+
+    f = failure((await mcp("limited")).content[0].text);
+    assert.equal(f.error, "RATE_LIMITED");
+    assert.equal(f.retry_after_seconds, 7);
+    assert.match(f.message, /rate limit/i);
+    assert.match(f.message, /Retry after 7s/);
+
+    f = failure((await mcp("boom")).content[0].text);
+    assert.equal(f.error, "SOURCE_UNAVAILABLE");
+    assert.match(f.message, /Upstream broke/);
+    assert.equal(failure((await mcp("html")).content[0].text).error, "SOURCE_UNAVAILABLE");
+    assert.equal(failure((await mcp("malformed")).content[0].text).error, "INVALID_ARGUMENT");
+
+    // No key was supplied, so a 401 is the service's problem, not the user's credential.
+    f = failure((await mcp(undefined)).content[0].text);
+    assert.equal(f.error, "SOURCE_UNAVAILABLE");
+
+    // Input validation never reaches upstream and is the caller's to fix.
+    const bad = await mcp("good", "get_courses_batch", { courseIds: [] });
+    assert.equal(bad.isError, true);
+    assert.equal(failure(bad.content[0].text).error, "INVALID_ARGUMENT");
+
+    // REST facade: still HTTP 200 with isError, now with the code alongside.
+    const rest = await fetch(`http://127.0.0.1:${port}/tools/list_departments`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Anteater-Api-Key": "bad" }, body: "{}",
+    });
+    assert.equal(rest.status, 200);
+    const body = await rest.json();
+    assert.equal(body.isError, true);
+    assert.equal(body.error, "CREDENTIAL_INVALID");
+    assert.equal(JSON.parse(body.result).error, "CREDENTIAL_INVALID");
+    const spec = await (await fetch(`http://127.0.0.1:${port}/openapi.json`)).json();
+    const schema = Object.values(spec.paths)[0].post.responses[200].content["application/json"].schema;
+    assert.deepEqual(schema.properties.error.enum, ["CREDENTIAL_INVALID", "PERMISSION_DENIED", "RATE_LIMITED", "INVALID_ARGUMENT", "SOURCE_UNAVAILABLE"]);
+
+    // REST transport errors: `error` is a code and `message` the text, status unchanged.
+    const transport = async (path, init) => {
+      const r = await fetch(`http://127.0.0.1:${port}${path}`, init);
+      return { status: r.status, body: await r.json() };
+    };
+    let t = await transport("/tools/nope", { method: "POST", body: "{}" });
+    assert.deepEqual([t.status, t.body.error, typeof t.body.message], [404, "NOT_FOUND", "string"]);
+    t = await transport("/tools/list_terms", { method: "POST", body: "not json" });
+    assert.deepEqual([t.status, t.body.error], [400, "INVALID_ARGUMENT"]);
+    t = await transport("/tools/list_terms", { method: "POST", body: "[]" });
+    assert.deepEqual([t.status, t.body.error], [400, "INVALID_ARGUMENT"]);
+    t = await transport("/tools/list_terms");
+    assert.deepEqual([t.status, t.body.error], [405, "METHOD_NOT_ALLOWED"]);
+    t = await transport("/tools/list_terms", { method: "POST", headers: { "X-Anteater-Api-Key": "a,b" }, body: "{}" });
+    assert.deepEqual([t.status, t.body.error], [400, "INVALID_ARGUMENT"]);
+
+    // resources/read keeps -32603 and adds the code under error.data.
+    const res = await (await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Anteater-Api-Key": "bad" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 5, method: "resources/read", params: { uri: "anteater://reference/departments" } }),
+    })).json();
+    assert.equal(res.error.code, -32603);
+    assert.deepEqual(res.error.data, { error: "CREDENTIAL_INVALID" });
+  } finally {
+    srv.kill();
+    await once(srv, "close");
+    await new Promise((resolve) => upstream.close(resolve));
+  }
+});
+
+await test("an environment key's rejection is the operator's unless ANTEATER_API_KEY_SCOPE=user", async () => {
+  const { createServer } = await import("node:http");
+  const { once } = await import("node:events");
+  const upstream = createServer((req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    res.writeHead(401).end(JSON.stringify({ ok: false, message: "Invalid key" }));
+  });
+  upstream.listen(0, "127.0.0.1");
+  await once(upstream, "listening");
+  const run = async (port, scope) => {
+    const env = { ...process.env, ANTEATER_API_BASE: `http://127.0.0.1:${upstream.address().port}`,
+      ANTEATER_API_KEY: "envkey", ANTEATER_MCP_TOKEN: "" };
+    if (scope) env.ANTEATER_API_KEY_SCOPE = scope; else delete env.ANTEATER_API_KEY_SCOPE;
+    const srv = spawn("node", ["anteater-mcp.mjs", "--http", "--port", String(port)], { stdio: "ignore", env });
+    try {
+      for (let i = 0; i < 50; i++) {
+        try { await fetch(`http://127.0.0.1:${port}/health`); break; }
+        catch { await new Promise((r) => setTimeout(r, 100)); }
+      }
+      const r = await (await fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_departments", arguments: {} } }),
+      })).json();
+      return JSON.parse(r.result.content[0].text);
+    } finally {
+      srv.kill();
+      await once(srv, "close");
+    }
+  };
+  try {
+    const operator = await run(8938, undefined);
+    assert.equal(operator.error, "SOURCE_UNAVAILABLE");
+    assert.match(operator.message, /server's configured .*key was rejected/i);
+    assert.equal((await run(8939, "operator")).error, "SOURCE_UNAVAILABLE");
+    assert.equal((await run(8940, "user")).error, "CREDENTIAL_INVALID");
+  } finally {
+    await new Promise((resolve) => upstream.close(resolve));
+  }
+});
+
+await test("standalone smoke: stdio and --http work with no platform and no network", async () => {
+  // Nothing listens on port 1, so the upstream fails fast and deterministically.
+  const env = { ...process.env, ANTEATER_API_BASE: "http://127.0.0.1:1", ZOTCOURSE_API_BASE: "off",
+    ANTEATER_API_KEY: "", ANTEATER_MCP_TOKEN: "" };
+  const calls = [
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "0" } } },
+    { jsonrpc: "2.0", id: 2, method: "tools/list" },
+    { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "list_departments", arguments: {} } },
+  ];
+  const check = (byId, transport) => {
+    assert.equal(byId(1).result.serverInfo.name, "anteater-mcp", `${transport}: initialize failed`);
+    assert.ok(byId(2).result.tools.length > 0, `${transport}: tools/list empty`);
+    const r = byId(3).result;
+    assert.equal(r.isError, true, `${transport}: offline call should fail`);
+    assert.equal(JSON.parse(r.content[0].text).error, "SOURCE_UNAVAILABLE", `${transport}: wrong code offline`);
+  };
+
+  // stdio
+  const stdio = await new Promise((resolve) => {
+    const p = spawn("node", ["anteater-mcp.mjs"], { stdio: ["pipe", "pipe", "pipe"], env });
+    let out = "";
+    p.stdout.on("data", (d) => (out += d));
+    p.on("close", () => resolve(out.split("\n").filter((l) => l.trim().startsWith("{")).map((l) => JSON.parse(l))));
+    p.stdin.end(calls.map((c) => JSON.stringify(c)).join("\n") + "\n");
+  });
+  check((id) => stdio.find((m) => m.id === id), "stdio");
+
+  // --http
+  const port = 8937;
+  const srv = spawn("node", ["anteater-mcp.mjs", "--http", "--port", String(port)], { stdio: "ignore", env });
+  try {
+    for (let i = 0; i < 50; i++) {
+      try { await fetch(`http://127.0.0.1:${port}/health`); break; }
+      catch { await new Promise((r) => setTimeout(r, 100)); }
+    }
+    const replies = await Promise.all(calls.map(async (c) => (await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c),
+    })).json()));
+    check((id) => replies.find((m) => m.id === id), "http");
+  } finally {
+    srv.kill();
+  }
+});
+
 await test("REST facade mirrors the MCP tools and generates a usable OpenAPI document", async () => {
   const { spawn: sp } = await import("node:child_process");
   const token = "offline-rest-token-0123456789";

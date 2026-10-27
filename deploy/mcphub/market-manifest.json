@@ -1,7 +1,7 @@
 {
   "name": "anteater-mcp",
   "display_name": "Anteater MCP",
-  "description": "UCI course discovery and degree planning using Anteater API. Not an official UCI service. Runs over stdio; includes Node 24 in the launch command.",
+  "description": "UCI course discovery and degree planning using Anteater API. Handles only public UCI course data and stores no personal data. Not an official UCI service. Runs over stdio; includes Node 24 in the launch command.",
   "repository": {
     "type": "git",
     "url": "https://github.com/KKazuhaK/Anteater-MCP"

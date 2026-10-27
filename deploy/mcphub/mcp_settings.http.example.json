@@ -8,6 +8,7 @@
         "Authorization": "Bearer ${ANTEATER_MCP_TOKEN}"
       },
       "visibility": "public",
+      "description": "Public UCI course catalogue, schedule, grade and degree-requirement data from Anteater API using the operator shared key; stores no personal data.",
       "owner": "admin"
     },
     "anteater-personal": {
@@ -25,6 +26,7 @@
         }
       ],
       "visibility": "public",
+      "description": "Public UCI course catalogue, schedule, grade and degree-requirement data from Anteater API using your own API key; stores no personal data.",
       "owner": "admin"
     }
   }

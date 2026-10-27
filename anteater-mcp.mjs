@@ -36,9 +36,15 @@ import process from "node:process";
 
 const BASE = process.env.ANTEATER_API_BASE || "https://anteaterapi.com";
 const API_KEY = process.env.ANTEATER_API_KEY || "";
+// Whose key is ANTEATER_API_KEY? By default the operator's, so its rejection is a
+// server-side fault. A deployment that injects each user's own key as the environment
+// (one process per user, e.g. a per-user stdio hub) sets this to "user".
+const API_KEY_SCOPE = process.env.ANTEATER_API_KEY_SCOPE === "user" ? "user" : "operator";
+// Per request: { key, scope }. A key from the X-Anteater-Api-Key header is always the user's.
 const upstreamCredentials = new AsyncLocalStorage();
 const cacheSecret = randomBytes(32);
-const currentApiKey = () => upstreamCredentials.getStore() ?? API_KEY;
+const currentApiKey = () => upstreamCredentials.getStore()?.key ?? API_KEY;
+const currentKeyScope = () => upstreamCredentials.getStore()?.scope ?? API_KEY_SCOPE;
 // Zotcourse is an independent WebSoc-backed source. It is used only when the
 // primary Anteater web-schedule request fails; set this to "off" to disable it.
 const ZOTCOURSE_BASE = process.env.ZOTCOURSE_API_BASE === "off"
@@ -76,7 +82,47 @@ function cacheSet(key, value, ttl) {
   cache.set(key, { at: Date.now(), ttl, value });
 }
 
-class ApiError extends Error {}
+/**
+ * Stable machine-readable failure codes. Tool failures reach callers as a JSON text
+ * object {"error": <code>, "message": <text>}, so a client can tell a bad credential
+ * from a broken upstream without parsing prose.
+ */
+const ERROR_CODES = ["CREDENTIAL_INVALID", "PERMISSION_DENIED", "RATE_LIMITED", "INVALID_ARGUMENT", "SOURCE_UNAVAILABLE"];
+// REST-facade transport failures, which never reach a tool.
+const TRANSPORT_ERROR_CODES = ["INVALID_ARGUMENT", "UNAUTHORIZED", "NOT_FOUND", "METHOD_NOT_ALLOWED", "PAYLOAD_TOO_LARGE"];
+
+/**
+ * A failure the caller can be told about. Unless stated otherwise it is the caller's
+ * own input that was wrong; everything that originates upstream passes its code.
+ */
+class ApiError extends Error {
+  constructor(message, code = "INVALID_ARGUMENT", extra = {}) {
+    super(message);
+    this.code = code;
+    this.retryAfterSeconds = extra.retryAfterSeconds;
+    this.notFound = extra.notFound === true; // upstream answered 404 for this resource
+  }
+}
+
+/** Retry-After is either delay-seconds or an HTTP date. Returns whole seconds, or undefined. */
+function parseRetryAfter(value) {
+  if (!value) return undefined;
+  const n = Number(value);
+  if (Number.isFinite(n) && n >= 0) return Math.ceil(n);
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? undefined : Math.max(0, Math.ceil((at - Date.now()) / 1000));
+}
+
+/** Turn anything thrown by a tool into the stable {error, message} shape. */
+function toolFailure(e) {
+  if (e instanceof ApiError) {
+    const out = { error: e.code, message: e.message };
+    if (e.retryAfterSeconds !== undefined) out.retry_after_seconds = e.retryAfterSeconds;
+    return out;
+  }
+  // Not one of ours: a bug or an unexpected runtime fault, never the caller's key.
+  return { error: "SOURCE_UNAVAILABLE", message: `${e?.name}: ${e?.message}` };
+}
 
 /**
  * GET a REST endpoint. `ttl` is the cache lifetime in ms; live seat counts get
@@ -103,7 +149,7 @@ async function api(path, params = {}, ttl = 10 * 60 * 1000) {
   try {
     res = await fetch(url, { headers, signal: AbortSignal.timeout(30000) });
   } catch (e) {
-    throw new ApiError(`Could not reach Anteater API (${e.message}).`);
+    throw new ApiError(`Could not reach Anteater API (${e.message}).`, "SOURCE_UNAVAILABLE");
   }
 
   const text = await res.text();
@@ -111,23 +157,68 @@ async function api(path, params = {}, ttl = 10 * 60 * 1000) {
   try {
     body = JSON.parse(text);
   } catch {
-    throw new ApiError(`Anteater API returned non-JSON (HTTP ${res.status}): ${text.slice(0, 200)}`);
+    // Not JSON: a WAF or CDN challenge page, a proxy error. Never evidence about the key.
+    throw new ApiError(
+      `Anteater API returned non-JSON (HTTP ${res.status}): ${text.slice(0, 200)}`,
+      "SOURCE_UNAVAILABLE",
+    );
   }
 
-  if (!res.ok || body.ok === false) {
-    const msg = body.message || body.error || `HTTP ${res.status}`;
+  if (!res.ok || body?.ok === false) {
+    const msg = body?.message || body?.error || `HTTP ${res.status}`;
     if (res.status === 429) {
+      const retryAfterSeconds = parseRetryAfter(res.headers.get("retry-after"));
       throw new ApiError(
         `Anteater API rate limit hit. Wait a moment, or set ANTEATER_API_KEY — see ` +
-          `https://docs.icssc.club/docs/developer/anteaterapi/keys-limits. Detail: ${msg}`,
+          `https://docs.icssc.club/docs/developer/anteaterapi/keys-limits. ` +
+          (retryAfterSeconds !== undefined ? `Retry after ${retryAfterSeconds}s. ` : "") +
+          `Detail: ${msg}`,
+        "RATE_LIMITED",
+        { retryAfterSeconds },
       );
     }
-    throw new ApiError(`Anteater API error: ${msg}`);
+    // A JSON 401 (or a 403 whose body says the key itself is bad) means the key was
+    // rejected. Whose problem that is depends on whose key it was.
+    const keyRejected = res.status === 401 || (res.status === 403 && /\b(invalid|expired|revoked|unknown)\b.*\bkey\b|\bkey\b.*\b(invalid|expired|revoked)\b/i.test(String(msg)));
+    if (apiKey && keyRejected) {
+      if (currentKeyScope() === "user") {
+        throw new ApiError(
+          `Anteater API rejected the API key (HTTP ${res.status}): ${msg}. Check that it is correct and still active.`,
+          "CREDENTIAL_INVALID",
+        );
+      }
+      throw new ApiError(
+        `The server's configured Anteater API key was rejected (HTTP ${res.status}): ${msg}. ` +
+          `The operator must replace ANTEATER_API_KEY; this is not something the caller can fix.`,
+        "SOURCE_UNAVAILABLE",
+      );
+    }
+    if (res.status === 403) {
+      throw new ApiError(
+        `Anteater API refused this request (HTTP 403): ${msg}. The API key is valid but not permitted to use this endpoint.`,
+        "PERMISSION_DENIED",
+      );
+    }
+    throw new ApiError(
+      `Anteater API error: ${msg}`,
+      res.status === 400 || res.status === 422 ? "INVALID_ARGUMENT" : "SOURCE_UNAVAILABLE",
+      { notFound: res.status === 404 },
+    );
   }
 
   const data = body.data;
   cacheSet(cacheKey, data, ttl);
   return data;
+}
+
+/** Like api(), but a genuine upstream 404 yields null. Every other failure propagates with its own code. */
+async function apiOrNull(path, params, ttl) {
+  try {
+    return await api(path, params, ttl);
+  } catch (e) {
+    if (e instanceof ApiError && e.notFound) return null;
+    throw e;
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -341,7 +432,7 @@ function defaultRmpTerm() {
 }
 
 async function zotcourseSearch(params, ttl = 5 * 60 * 1000) {
-  if (!ZOTCOURSE_BASE) throw new ApiError("Zotcourse fallback is disabled (ZOTCOURSE_API_BASE=off).");
+  if (!ZOTCOURSE_BASE) throw new ApiError("Zotcourse fallback is disabled (ZOTCOURSE_API_BASE=off).", "SOURCE_UNAVAILABLE");
   const qs = new URLSearchParams();
   for (const [key, value] of Object.entries(zotcourseParams(params))) {
     if (value !== undefined && value !== null && value !== "") qs.set(key, String(value));
@@ -358,17 +449,17 @@ async function zotcourseSearch(params, ttl = 5 * 60 * 1000) {
       signal: AbortSignal.timeout(30000),
     });
   } catch (e) {
-    throw new ApiError(`Could not reach Zotcourse (${e.message}).`);
+    throw new ApiError(`Could not reach Zotcourse (${e.message}).`, "SOURCE_UNAVAILABLE");
   }
   const text = await res.text();
   let body;
   try {
     body = JSON.parse(text);
   } catch {
-    throw new ApiError(`Zotcourse returned non-JSON (HTTP ${res.status}): ${text.slice(0, 160)}`);
+    throw new ApiError(`Zotcourse returned non-JSON (HTTP ${res.status}): ${text.slice(0, 160)}`, "SOURCE_UNAVAILABLE");
   }
   if (!res.ok || !Array.isArray(body?.data)) {
-    throw new ApiError(`Zotcourse error: ${body?.error || `HTTP ${res.status}`}`);
+    throw new ApiError(`Zotcourse error: ${body?.error || `HTTP ${res.status}`}`, "SOURCE_UNAVAILABLE");
   }
   const data = normalizeZotcourse(body, params.department);
   cacheSet(cacheKey, data, ttl);
@@ -383,7 +474,13 @@ async function websoc(params, ttl = 5 * 60 * 1000) {
     try {
       return { data: await zotcourseSearch(params, ttl), source: "Zotcourse" };
     } catch (backup) {
-      throw new ApiError(`${primary.message} Backup source Zotcourse also failed: ${backup.message}`);
+      // Keep the primary's code: if the key was rejected or rate-limited, that is what
+      // the caller needs to act on, not the fact that the backup failed too.
+      throw new ApiError(
+        `${primary.message} Backup source Zotcourse also failed: ${backup.message}`,
+        primary instanceof ApiError ? primary.code : "SOURCE_UNAVAILABLE",
+        { retryAfterSeconds: primary.retryAfterSeconds },
+      );
     }
   }
 }
@@ -976,7 +1073,7 @@ tool({
         // this endpoint. Telling someone who already has a working key to "set a key"
         // is a dead end, so distinguish them.
         const noKey = /key is required/i.test(e.message);
-        const notPermitted = /not permitted/i.test(e.message);
+        const notPermitted = e.code === "PERMISSION_DENIED" || /not permitted/i.test(e.message);
         if (!noKey && !notPermitted) throw e;
         usedFallbackReason = notPermitted
           ? `the fuzzy-search endpoint rejected this API key as "not permitted to access this ` +
@@ -1055,12 +1152,8 @@ tool({
   },
   async run({ courseId }) {
     const id = await resolveCourseId(courseId);
-    let c;
-    try {
-      c = await api(`/v2/rest/courses/${encodeURIComponent(id)}`, {}, 24 * 3600 * 1000);
-    } catch {
-      throw new ApiError(`No course "${courseId}" (resolved to "${id}"). Try search_courses to find the right id.`);
-    }
+    const c = await apiOrNull(`/v2/rest/courses/${encodeURIComponent(id)}`, {}, 24 * 3600 * 1000);
+    if (!c) throw new ApiError(`No course "${courseId}" (resolved to "${id}"). Try search_courses to find the right id.`);
 
     const L = [];
     L.push(`${c.department} ${c.courseNumber} — ${c.title}`);
@@ -1888,7 +1981,7 @@ tool({
   },
   async run(a) {
     const id = await resolveCourseId(a.courseId);
-    const c = await api(`/v2/rest/courses/${encodeURIComponent(id)}`, {}, 24 * 3600 * 1000).catch(() => null);
+    const c = await apiOrNull(`/v2/rest/courses/${encodeURIComponent(id)}`, {}, 24 * 3600 * 1000);
     if (!c) throw new ApiError(`No course "${a.courseId}" (resolved to "${id}").`);
 
     const taken = {};
@@ -1899,7 +1992,7 @@ tool({
       // A typo or a transfer-course name resolves to a plausible-looking id that
       // matches nothing in the tree. Silently dropping it produced a confident
       // "not satisfied" verdict for work the student had actually done.
-      const known = await api(`/v2/rest/courses/${encodeURIComponent(key)}`, {}, 24 * 3600 * 1000).catch(() => null);
+      const known = await apiOrNull(`/v2/rest/courses/${encodeURIComponent(key)}`, {}, 24 * 3600 * 1000);
       if (!known) unrecognized.push(String(raw).trim());
       taken[key] = { grade: grade ? grade.trim().toUpperCase() : undefined };
     }
@@ -3536,9 +3629,25 @@ function buildOpenApi(req) {
                   type: "object",
                   properties: {
                     result: { type: "string", description: "Formatted text. Present it as given; do not re-tabulate." },
-                    isError: { type: "boolean", description: "True when the text explains a failure rather than an answer." },
+                    isError: { type: "boolean", description: "True when the call failed. `result` is then a JSON string {\"error\": CODE, \"message\": text}." },
+                    error: { type: "string", enum: ERROR_CODES, description: "Present only on failure. CREDENTIAL_INVALID: the requesting user's API key was rejected. PERMISSION_DENIED: key valid but not allowed. RATE_LIMITED: upstream 429. INVALID_ARGUMENT: bad tool input. SOURCE_UNAVAILABLE: network, timeout, 5xx, a server-side key fault or anything else upstream." },
                   },
                   required: ["result"],
+                },
+              },
+            },
+          },
+          "4XX": {
+            description: "Transport failure (bad JSON body, missing token, unknown tool, wrong method). `error` is a code, `message` the text.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    error: { type: "string", enum: TRANSPORT_ERROR_CODES },
+                    message: { type: "string" },
+                  },
+                  required: ["error", "message"],
                 },
               },
             },
@@ -3576,7 +3685,7 @@ async function handleRpc(msg) {
   const { id, method, params } = msg;
   const isNotification = id === undefined || id === null;
   const reply = (result) => (isNotification ? null : { jsonrpc: "2.0", id, result });
-  const fail = (code, message) => (isNotification ? null : { jsonrpc: "2.0", id, error: { code, message } });
+  const fail = (code, message, data) => (isNotification ? null : { jsonrpc: "2.0", id, error: { code, message, ...(data ? { data } : {}) } });
 
   switch (method) {
     case "initialize":
@@ -3624,8 +3733,7 @@ async function handleRpc(msg) {
         const text = await t.run(params.arguments || {});
         return reply({ content: [{ type: "text", text: String(text) }], isError: false });
       } catch (e) {
-        const message = e instanceof ApiError ? e.message : `${e.name}: ${e.message}`;
-        return reply({ content: [{ type: "text", text: `Error: ${message}` }], isError: true });
+        return reply({ content: [{ type: "text", text: JSON.stringify(toolFailure(e)) }], isError: true });
       }
     }
 
@@ -3666,7 +3774,10 @@ async function handleRpc(msg) {
       try {
         return reply({ contents: [{ uri: r.uri, mimeType: r.mimeType, text: await r.read() }] });
       } catch (e) {
-        return fail(-32603, e instanceof ApiError ? e.message : `${e.name}: ${e.message}`);
+        {
+        const f = toolFailure(e);
+        return fail(-32603, f.message, { error: f.error });
+      }
       }
     }
 
@@ -3880,8 +3991,8 @@ function runHttp(port, host) {
       const queryTokens = url.searchParams.getAll("token");
       const viaQuery = queryTokens.length === 1 && secretEquals(queryTokens[0], MCP_TOKEN);
       if (!viaHeader && !viaQuery) {
-        res.writeHead(401, { ...CORS, "Content-Type": "text/plain", "WWW-Authenticate": "Bearer" })
-          .end("Unauthorized");
+        res.writeHead(401, { ...CORS, "Content-Type": "application/json", "WWW-Authenticate": "Bearer" })
+          .end(JSON.stringify({ error: "UNAUTHORIZED", message: "Unauthorized" }));
         return;
       }
     }
@@ -3892,10 +4003,12 @@ function runHttp(port, host) {
       typeof personalKey !== "string" || !personalKey.trim() ||
       personalKey.includes(",") || personalKey.length > 8192
     )) {
-      return res.writeHead(400, { ...CORS, "Content-Type": "text/plain" })
-        .end("Invalid X-Anteater-Api-Key header");
+      return res.writeHead(400, { ...CORS, "Content-Type": "application/json" })
+        .end(JSON.stringify({ error: "INVALID_ARGUMENT", message: "Invalid X-Anteater-Api-Key header" }));
     }
-    const requestApiKey = personalKey === undefined ? API_KEY : personalKey.trim();
+    const requestApiKey = personalKey === undefined
+      ? { key: API_KEY, scope: API_KEY_SCOPE }
+      : { key: personalKey.trim(), scope: "user" };
 
     if (path === "/health") {
       return res.writeHead(200, { ...CORS, "Content-Type": "application/json" })
@@ -3932,10 +4045,11 @@ function runHttp(port, host) {
       const t = toolByName.get(name);
       if (!t) {
         return res.writeHead(404, { ...CORS, "Content-Type": "application/json" })
-          .end(JSON.stringify({ error: `Unknown tool "${name}". See /openapi.json for the list.` }));
+          .end(JSON.stringify({ error: "NOT_FOUND", message: `Unknown tool "${name}". See /openapi.json for the list.` }));
       }
       if (req.method !== "POST") {
-        return res.writeHead(405, { ...CORS, Allow: "POST" }).end();
+        return res.writeHead(405, { ...CORS, Allow: "POST", "Content-Type": "application/json" })
+          .end(JSON.stringify({ error: "METHOD_NOT_ALLOWED", message: "Use POST with a JSON body." }));
       }
 
       const chunks = [];
@@ -3943,7 +4057,7 @@ function runHttp(port, host) {
       let aborted = false;
       req.on("data", (c) => {
         size += c.length;
-        if (size > 2e6) { aborted = true; res.writeHead(413, CORS).end(); req.destroy(); return; }
+        if (size > 2e6) { aborted = true; res.writeHead(413, { ...CORS, "Content-Type": "application/json" }).end(JSON.stringify({ error: "PAYLOAD_TOO_LARGE", message: "Request body exceeds 2 MB." })); req.destroy(); return; }
         chunks.push(c);
       });
       req.on("end", () => upstreamCredentials.run(requestApiKey, async () => {
@@ -3954,11 +4068,11 @@ function runHttp(port, host) {
           args = raw ? JSON.parse(raw) : {};
         } catch {
           return res.writeHead(400, { ...CORS, "Content-Type": "application/json" })
-            .end(JSON.stringify({ error: "Request body must be JSON." }));
+            .end(JSON.stringify({ error: "INVALID_ARGUMENT", message: "Request body must be JSON." }));
         }
         if (args === null || typeof args !== "object" || Array.isArray(args)) {
           return res.writeHead(400, { ...CORS, "Content-Type": "application/json" })
-            .end(JSON.stringify({ error: "Request body must be a JSON object of arguments." }));
+            .end(JSON.stringify({ error: "INVALID_ARGUMENT", message: "Request body must be a JSON object of arguments." }));
         }
         try {
           const text = await t.run(args);
@@ -3967,9 +4081,11 @@ function runHttp(port, host) {
         } catch (e) {
           // Mirror the MCP side: a tool failure is an answer about the failure, not
           // a transport error, so the model can read it and try something else.
-          const message = e instanceof ApiError ? e.message : `${e.name}: ${e.message}`;
+          // `result` carries the same JSON text MCP clients get; `error` repeats the code
+          // at the top level so REST callers need not parse it. Status stays 200.
+          const failure = toolFailure(e);
           res.writeHead(200, { ...CORS, "Content-Type": "application/json" })
-            .end(JSON.stringify({ result: `Error: ${message}`, isError: true }));
+            .end(JSON.stringify({ result: JSON.stringify(failure), isError: true, error: failure.error }));
         }
       }));
       return;
@@ -4000,7 +4116,7 @@ function runHttp(port, host) {
     let aborted = false;
     req.on("data", (c) => {
       size += c.length;
-      if (size > 2e6) { aborted = true; res.writeHead(413, CORS).end(); req.destroy(); return; }
+      if (size > 2e6) { aborted = true; res.writeHead(413, { ...CORS, "Content-Type": "application/json" }).end(JSON.stringify({ error: "PAYLOAD_TOO_LARGE", message: "Request body exceeds 2 MB." })); req.destroy(); return; }
       chunks.push(c);
     });
     req.on("end", () => upstreamCredentials.run(requestApiKey, async () => {

@@ -20,6 +20,13 @@ expects `/opt/mcp/anteater/anteater-mcp.mjs` and `/opt/mcp/bin/node24`.
 
 ## Shared and personal entries
 
+The server names `anteater-shared` and `anteater-personal` are stable identifiers that
+clients and Hub bindings may key on; do not rename them. Each entry carries a
+one-line `description` stating that it serves public UCI course data and stores no
+personal data. Tool failures use the stable codes in the repository README's
+"Errors" section, so a client can distinguish a rejected personal key
+(`CREDENTIAL_INVALID`) from an outage (`SOURCE_UNAVAILABLE`).
+
 - **anteater-shared** passes the Hub's `ANTEATER_SHARED_API_KEY` into the child's
   `ANTEATER_API_KEY`. Users share the upstream quota. Leave the Hub variable empty
   for anonymous upstream access. This is deliberately a separate server entry.
@@ -27,6 +34,9 @@ expects `/opt/mcp/anteater/anteater-mcp.mjs` and `/opt/mcp/bin/node24`.
   slot. Every user binds their own secret key in Hub Credentials. The Hub starts
   and recycles one process per user; missing credentials do not fall back to the
   shared entry. Personal keys are not stored in the shared server definition.
+  The personal stdio entries set `ANTEATER_API_KEY_SCOPE=user`, so a rejection of that
+  key is reported as `CREDENTIAL_INVALID` (the user should update their key). The shared
+  entry keeps the default `operator` scope: its rejection is `SOURCE_UNAVAILABLE`.
 
 Clients use their own user-level Hub key or user OAuth authorization. Keep Hub
 authentication enabled and ordinary users non-admin. `visibility: public` means
