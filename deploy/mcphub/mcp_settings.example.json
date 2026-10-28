@@ -4,6 +4,7 @@
       "type": "stdio",
       "owner": "admin",
       "visibility": "public",
+      "description": "Public UCI course catalogue, schedule, grade and degree-requirement data from Anteater API using the operator shared key; stores no personal data.",
       "idleTimeoutMs": 300000,
       "command": "npx",
       "args": [
@@ -21,6 +22,7 @@
       "type": "stdio",
       "owner": "admin",
       "visibility": "public",
+      "description": "Public UCI course catalogue, schedule, grade and degree-requirement data from Anteater API using your own API key; stores no personal data.",
       "idleTimeoutMs": 300000,
       "command": "npx",
       "args": [
@@ -30,6 +32,9 @@
         "--",
         "anteater-mcp"
       ],
+      "env": {
+        "ANTEATER_API_KEY_SCOPE": "user"
+      },
       "credentialTemplate": [
         {
           "target": "env",

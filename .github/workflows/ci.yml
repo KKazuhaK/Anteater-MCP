@@ -34,7 +34,10 @@ jobs:
       - name: Tools load
         run: node anteater-mcp.mjs --list-tools
 
-      - name: Offline conformance tests
+      # Includes the standalone smoke test (stdio and --http, no platform, no network:
+      # initialize, tools/list, and a call that must fail with SOURCE_UNAVAILABLE) and
+      # the structured error-code tests against a mocked upstream.
+      - name: Offline conformance and standalone smoke tests
         run: npm test
 
       - name: No runtime dependencies crept in

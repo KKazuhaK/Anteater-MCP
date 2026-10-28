@@ -16,6 +16,8 @@ services:
     environment:
       ANTEATER_MCP_TOKEN: "${ANTEATER_MCP_TOKEN:?set ANTEATER_MCP_TOKEN in .env}"
       ANTEATER_API_KEY: "${ANTEATER_API_KEY:-}"
+      # Whose key is ANTEATER_API_KEY: "operator" (default) or "user". See README, Errors.
+      ANTEATER_API_KEY_SCOPE: "${ANTEATER_API_KEY_SCOPE:-operator}"
       ANTEATER_API_BASE: "https://anteaterapi.com"
       ANTEATER_ALLOWED_ORIGINS: ""
       # Which peers may set X-Forwarded-*. Without this the server ignores them, so a
