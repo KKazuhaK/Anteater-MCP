@@ -1,8 +1,8 @@
 # Anteater MCP
 
-Release **1.0.0-beta.2** adds separate personal/shared MCPHub setup and optional
-per-request upstream keys for HTTP hosting, with credential-isolated caches.
-The shared service still supports anonymous upstream quota when no key is set.
+Release **1.0.0-beta.3** returns structured error codes from every tool and from
+the REST facade, so clients can tell a rejected API key from a rate limit or an
+upstream outage. See [Changes](#changes) for the REST response change.
 
 
 An MCP server that lets Claude and ChatGPT help you pick classes at UC Irvine.
@@ -461,7 +461,7 @@ directly and is unaffected.
 
 ## Changes
 
-### Unreleased
+### 1.0.0-beta.3
 
 - **Tool failures are now structured.** The text content of an `isError` result is a JSON
   object `{"error": CODE, "message": text}` instead of `Error: ...` prose. Codes:
